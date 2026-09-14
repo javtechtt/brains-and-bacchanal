@@ -1,0 +1,25 @@
+{
+  "status": "TEST",
+  "note": "Obviously fake fixture. Never production. See docs/CONTENT_POLICY.md.",
+  "source": "TEST_FIXTURE",
+  "items": [
+    {
+      "id": "test-001",
+      "difficulty": "easy",
+      "prompt": "TEST QUESTION: What colour is the test placeholder square?",
+      "acceptedAnswers": ["TEST ANSWER ONE"]
+    },
+    {
+      "id": "test-002",
+      "difficulty": "medium",
+      "prompt": "TEST QUESTION: How many sides does the test placeholder shape have?",
+      "acceptedAnswers": ["TEST ANSWER TWO"]
+    },
+    {
+      "id": "test-003",
+      "difficulty": "hard",
+      "prompt": "TEST QUESTION: What is the name of the test placeholder?",
+      "acceptedAnswers": ["TEST ANSWER THREE"]
+    }
+  ]
+}

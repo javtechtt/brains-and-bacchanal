@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "Brains & Bacchanal base configuration",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+
+    // CLAUDE.md — "TypeScript strict mode."
+    "strict": true,
+
+    // Additional safety. The server is authoritative for BB, timers and card
+    // legality; these flags make whole classes of authority bugs unrepresentable.
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "useUnknownInCatchVariables": true,
+
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "skipLibCheck": true
+  },
+  "exclude": ["node_modules", "dist", ".next", "build", "coverage"]
+}

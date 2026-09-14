@@ -1,0 +1,33 @@
+{
+  "name": "brains-and-bacchanal",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Brains & Bacchanal — a host-led team party game. Where knowledge meets foolishness.",
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter \"./apps/**\" dev",
+    "build:packages": "pnpm --recursive --filter \"./packages/**\" build",
+    "build": "pnpm build:packages && pnpm --recursive --filter \"./apps/**\" build",
+    "typecheck": "pnpm build:packages && pnpm --recursive typecheck",
+    "lint": "eslint . --max-warnings 0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "pnpm --recursive exec rimraf dist .next .turbo *.tsbuildinfo"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.10.5",
+    "eslint": "^9.17.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.4.2",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.19.0",
+    "vitest": "^2.1.8"
+  }
+}

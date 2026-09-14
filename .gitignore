@@ -1,0 +1,75 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+out/
+*.tsbuildinfo
+.next/
+.turbo/
+next-env.d.ts
+
+# Test / coverage
+coverage/
+*.lcov
+
+# Environment — never commit real values
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# ---------------------------------------------------------------------------
+# CONTENT POLICY ENFORCEMENT — see docs/CONTENT_POLICY.md
+#
+# The normal Git repository must never contain real unrevealed production
+# questions, accepted production answers, sealed Family Feud board labels, or
+# future challenge secrets. These rules are a tooling backstop so that policy
+# does not depend on memory alone.
+#
+# Development fixtures belong in content/test-only/ and ARE committed.
+# ---------------------------------------------------------------------------
+content/production-sealed/
+content/production/
+content/sealed/
+*.sealed.json
+*.production.json
+
+# ---------------------------------------------------------------------------
+# Unity — see docs/ARCHITECTURE.md §1 (Host Display) and Phase 8
+# ---------------------------------------------------------------------------
+unity/host/Library/
+unity/host/Temp/
+unity/host/Obj/
+unity/host/Build/
+unity/host/Builds/
+unity/host/Logs/
+unity/host/UserSettings/
+unity/host/MemoryCaptures/
+unity/host/Recordings/
+*.csproj
+*.unityproj
+*.sln
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb.meta
+*.apk
+*.aab
+sysinfo.txt
+crashlytics-build.properties

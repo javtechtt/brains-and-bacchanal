@@ -1,18 +1,25 @@
 /**
- * @bb/protocol — shared contracts between the game server, the web app and the
- * Unity host display.
+ * @bb/protocol — the shared language of the game server, the web clients and
+ * the Unity host display.
  *
  * ARCHITECTURE.md §3: schema -> TypeScript types -> C# DTOs.
  *
- * PHASE 1 SCOPE IS DELIBERATELY MINIMAL: the protocol version constant, the
- * health response shape, and enough structure to prove cross-package imports
- * work.
+ * TRANSPORT INDEPENDENCE: nothing in this package imports Socket.IO, ws, the
+ * browser WebSocket API, Next.js, React or any Unity type. It describes
+ * MESSAGES, not how they travel. CLAUDE.md requires the transport choice to
+ * follow the Phase 3 measurement, and that stays possible only while the
+ * protocol knows nothing about transports.
  *
- * The client intent envelope, server event envelope, sequence numbers,
- * idempotency IDs, structured errors, snapshot/reconnect format and game-state
- * messages are all PHASE 2 (see DEVELOPMENT_ROADMAP.md — "Phase 2 — Protocol +
- * Generic Game State"). Do not add them here ahead of that phase.
+ * Phase 2 scope: version, identifiers, envelopes, rejections, lifecycle
+ * phases, generic domain models and the snapshot shape. Concrete intent and
+ * event types belong to the phases that implement those behaviours.
  */
 
 export * from './version.js';
+export * from './ids.js';
+export * from './errors.js';
+export * from './envelope.js';
+export * from './lifecycle.js';
+export * from './models.js';
+export * from './snapshot.js';
 export * from './health.js';

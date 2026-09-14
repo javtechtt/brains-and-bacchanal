@@ -13,6 +13,9 @@
  * engine ahead of those phases.
  */
 
+/** Each team begins with 1,000 BB. (GAME_RULES_LOCKED.md §1) */
+export const STARTING_BB = 1_000;
+
 /** BB cannot go below 0. (GAME_RULES_LOCKED.md §1) */
 export const BB_FLOOR = 0;
 

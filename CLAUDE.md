@@ -27,6 +27,11 @@ Before changing gameplay or architecture, read these files in this order:
 6. `docs/CONTENT_POLICY.md`
 7. `docs/PLAYER_HOST_REFERENCE.md`
 
+Implementation references (generated during development, not rule sources):
+
+- `docs/PROTOCOL.md`
+- `docs/STATE_MACHINE.md`
+
 These repo files override older PDFs, DOCX files, screenshots, or previous AI-generated plans unless the project owner explicitly says otherwise.
 
 ## Most Important Rule

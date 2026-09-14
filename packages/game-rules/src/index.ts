@@ -4,17 +4,22 @@
  * CLAUDE.md — "Keep game rules out of UI components. Prefer pure, testable
  * server-side rule functions."
  *
- * This package must stay pure: no I/O, no transport, no framework, no
- * wall-clock reads. ESLint enforces those bans (see eslint.config.js).
+ * This package stays pure: no I/O, no transport, no framework, no wall-clock
+ * reads. ESLint enforces those bans (see eslint.config.mjs).
  *
- * PHASE 1 SCOPE IS DELIBERATELY MINIMAL: the deterministic Clock abstraction
- * and a single locked rule (BB floor-at-zero) to prove the testing setup.
+ * Phase 2 scope: the deterministic clock, pausable deadlines, the centralised
+ * phase-transition system, the event log, intent deduplication, and a minimal
+ * in-memory session that proves they work together.
  *
- * The rules engine proper — card eligibility and Clash, the BB ledger, Market,
- * Maco Mail, challenge state and round logic — belongs to Phases 5-7. Several
- * of those rules are still unresolved in docs/OPEN_RULES.md and must not be
- * implemented until the project owner decides them.
+ * The rules engine proper — cards and Clash, the BB ledger, Market, Maco Mail,
+ * round logic — belongs to Phases 5-7. Several of those rules remain unresolved
+ * in docs/OPEN_RULES.md and must not be implemented until decided.
  */
 
 export * from './clock.js';
+export * from './deadline.js';
 export * from './bb.js';
+export * from './transitions.js';
+export * from './event-log.js';
+export * from './idempotency.js';
+export * from './session.js';

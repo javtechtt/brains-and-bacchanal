@@ -39,6 +39,36 @@ Source of truth: `packages/protocol/src/lifecycle.ts` and
 | `SUDDEN_DEATH` | Tied leaders playing for the win |
 | `GAME_OVER` | Terminal |
 
+## Room lifecycle is a SEPARATE state machine
+
+Phase 4 adds `RoomStatus`, which is **not** a `GamePhase`:
+
+```text
+OPEN ──(HOST_LOCK_TEAMS)──▶ LOCKED
+  ▲                            │
+  └──(HOST_UNLOCK_TEAMS)───────┘
+  │                            │
+  └──────────┬─────────────────┘
+             ▼
+          CLOSED   (terminal)
+```
+
+| Status | Joins | Reconnects | Team edits |
+|---|---|---|---|
+| `OPEN` | yes | yes | yes |
+| `LOCKED` | **no** | **yes** | no |
+| `CLOSED` | no | no | no |
+
+They are deliberately distinct because they answer different questions.
+`RoomStatus` answers *"can a phone still join?"*; `GamePhase` answers *"what is
+the game doing?"*. Merging them would make room closure depend on gameplay
+state — so a room could not be closed mid-challenge without inventing a rule,
+and `LOBBY` would have to mean both "accepting joins" and "not playing yet".
+
+`LOCKED` still accepts **reconnects**, and that is the important asymmetry: a
+locked roster is final for *new* players, but an existing player whose phone died
+must be able to come back. Reconnecting never unlocks a room.
+
 ## Legal transitions
 
 ```text
@@ -195,5 +225,17 @@ Phase 2 does **not** decide, and must not be read as deciding:
 - `Partner, I Sorry` with insufficient BB (§12)
 
 Also deferred by phase, not by open rule: rounds, Bacchanal Cards, Clash, the
-Market, Maco Mail, Host Deals, wagers, the buzzer, the BB ledger, authentication
-and disconnect detection.
+Market, Maco Mail, Host Deals, wagers, the buzzer and the BB ledger.
+
+Phase 4 has since implemented disconnect detection and room-scoped credentials
+(`docs/LOBBY.md`). It deliberately did **not** implement:
+
+- **Auto-pause on disconnect in the lobby.** D-011 pauses gameplay when an
+  active player drops, but a lobby has no gameplay to pause. Phase 5 wires it
+  when there is something to protect.
+- **A disconnect timeout.** Nothing drops a disconnected player after any
+  interval, because "how long before a missing player is removed" is not a
+  locked rule. The Host removes people deliberately.
+- **What happens if the HOST disconnects mid-game.** Phase 4 records
+  `hostConnected` and lets the Host reconnect to the same room. It does not
+  decide whether play should halt, because no rule says.

@@ -21,6 +21,8 @@ export * from './errors.js';
 export * from './envelope.js';
 export * from './lifecycle.js';
 export * from './models.js';
+export * from './room.js';
+export * from './room-code.js';
 export * from './snapshot.js';
 export * from './transport.js';
 export * from './benchmark.js';

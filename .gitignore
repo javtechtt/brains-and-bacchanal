@@ -86,3 +86,7 @@ crashlytics-build.properties
 
 # Ephemeral development token for cloud benchmark testing. Never commit.
 .cloud-test-token
+
+# Python bytecode from the tools/ verification harnesses.
+__pycache__/
+*.pyc

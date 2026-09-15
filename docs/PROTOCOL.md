@@ -8,12 +8,14 @@ defines it.
 
 ## Scope
 
-Phase 2 defines the **envelopes**, not the messages that travel in them.
+Phase 2 defined the **envelopes**. Phase 4 adds the first concrete messages that
+travel in them: the production lobby — rooms, players, teams and reconnect.
+They are specified in **`docs/LOBBY.md`** and listed under
+[Phase 4 messages](#phase-4-messages-lobby) below.
 
-Concrete intent types (`JOIN_ROOM`, `PLAY_CARD`, `PURCHASE_ITEM`, `BUZZ`,
-`HOST_MARK_VALID`, …) are **not** defined yet. They belong to the phases that
-implement those behaviours, and several depend on rules still open in
-`OPEN_RULES.md`.
+Gameplay intents (`PLAY_CARD`, `PURCHASE_ITEM`, `BUZZ`, `HOST_MARK_VALID`, …)
+are still **not** defined. They belong to the phases that implement those
+behaviours, and several depend on rules still open in `OPEN_RULES.md`.
 
 ## Transport independence
 
@@ -199,6 +201,64 @@ not question text, accepted answers or board labels. Per `CONTENT_POLICY.md`,
 "player browsers must never receive future/unrevealed answer payloads."
 
 Phase 2 defines the shape. Delivering it over a wire is Phase 3+.
+
+## Phase 4 messages (lobby)
+
+Full behaviour is in `docs/LOBBY.md`; this is the protocol-level summary.
+
+**Intents**
+
+| Intent | Sender | Notes |
+|---|---|---|
+| `CREATE_ROOM` | Unity Host | Needs no existing room |
+| `JOIN_ROOM` | phone | Addressed by room **code** |
+| `RECONNECT_PLAYER` | phone | `playerId` + reconnect credential |
+| `RECONNECT_HOST` | Unity Host | `hostToken` |
+| `LEAVE_ROOM` | phone | Deliberate; destroys membership |
+| `REQUEST_LOBBY_SNAPSHOT` | any | **Read-only** |
+| `HOST_SET_TEAM_MODE` | Host | 2 or 3 |
+| `HOST_ASSIGN_PLAYER_TEAM` | Host | |
+| `HOST_UNASSIGN_PLAYER` | Host | |
+| `HOST_REMOVE_PLAYER` | Host | |
+| `HOST_LOCK_TEAMS` | Host | |
+| `HOST_UNLOCK_TEAMS` | Host | |
+| `HOST_CLOSE_ROOM` | Host | |
+
+**Events**: `PLAYER_JOINED`, `PLAYER_RECONNECTED`, `PLAYER_DISCONNECTED`,
+`PLAYER_LEFT`, `PLAYER_REMOVED`, `TEAM_MODE_CHANGED`,
+`TEAM_ASSIGNMENT_CHANGED`, `TEAMS_LOCKED`, `TEAMS_UNLOCKED`, `ROOM_CLOSED`,
+`HOST_CONNECTION_CHANGED`, `CONNECTION_SUPERSEDED`.
+
+### `NO_ROOM_ID`
+
+`roomId` is required and non-empty, but `CREATE_ROOM` has no room yet and
+`JOIN_ROOM` knows only a code. Both send the placeholder `"pending"`.
+
+Naming the case beats the alternatives: relaxing the envelope would let a
+genuinely missing `roomId` through *everywhere else*, and letting each client
+invent its own placeholder would leave the server guessing.
+
+### Reads return state in the acknowledgement
+
+`REQUEST_LOBBY_SNAPSHOT` consumes **no sequence number** and emits **no event**.
+
+This preserves what a sequence number means — an accepted change to shared state
+— so a gap still reliably means "you missed something". Phase 3 briefly did the
+opposite and idle Unity clients inflated the sequence by ~10 every 5 seconds.
+
+### Transient events
+
+`CONNECTION_SUPERSEDED` is addressed to **one** connection, carries the current
+sequence number, and never enters history. It reports that a socket is about to
+be closed, which changed nothing about the room; numbering it would create a gap
+in every other client's stream describing a non-event.
+
+### Credentials never travel on a broadcast
+
+A reconnect credential and the `hostToken` appear **only** in the acknowledgement
+to the one connection that earned them. They are absent from every event payload
+and every snapshot — `toPublicPlayer` is the only route from server state to a
+client, and it strips the secret.
 
 ## Event history
 

@@ -31,6 +31,9 @@ Implementation references (generated during development, not rule sources):
 
 - `docs/PROTOCOL.md`
 - `docs/STATE_MACHINE.md`
+- `docs/LOBBY.md`
+- `docs/NETWORK_BENCHMARK.md`
+- `docs/UNITY_HOST.md`
 
 These repo files override older PDFs, DOCX files, screenshots, or previous AI-generated plans unless the project owner explicitly says otherwise.
 
@@ -146,11 +149,13 @@ See `docs/CONTENT_POLICY.md`.
 
 ## Networking
 
-The project still needs a measured choice between Socket.IO and raw WebSockets.
+**Decided in Phase 3: raw WebSockets (DECISION_LOG.md D-014).**
 
-Do not permanently bind game rules to either transport before the planned networking comparison.
+Production room connections use raw WebSockets at `/room/ws`. Socket.IO remains
+installed for benchmark tooling only and must not be used by production code.
 
-Transport-specific code must sit behind an adapter/interface.
+Transport-specific code must still sit behind the adapter/interface, so the
+decision stays reversible.
 
 ## Disconnect Rule
 
@@ -206,10 +211,25 @@ After each major task, report:
 
 ## Current Phase
 
-Start with **Phase 1 — Project Foundation** from `docs/DEVELOPMENT_ROADMAP.md`.
+**Phases 1–4 are complete.**
+
+- Phase 1 — Project Foundation
+- Phase 2 — Protocol + Generic Game State
+- Phase 3 — Realtime Transport Comparison (closed: raw WebSockets, D-014)
+- Phase 4 — Rooms, Players, Teams & Reconnect (`docs/LOBBY.md`)
+
+Next is **Phase 5 — Generic Authoritative Engine** from
+`docs/DEVELOPMENT_ROADMAP.md`. **Do not begin it without the project owner
+asking.**
 
 Do not jump ahead to full gameplay.
 
 Do not build production content.
 
 Do not finalize any rule listed in `docs/OPEN_RULES.md`.
+
+### Standing note on Maco! (OPEN_RULES.md §7)
+
+The owner's current instruction: **leave Maco! out for now; if it is never
+resolved, it does not go in the deck.** This is a decision to DEFER, not a rule.
+Do not implement Maco! eligibility, and do not quietly give it a legal challenge.

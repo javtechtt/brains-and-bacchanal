@@ -6,6 +6,10 @@ EditorBuildSettings:
   serializedVersion: 2
   m_Scenes:
   - enabled: 1
+    path: Assets/Scenes/HostLobby.unity
+    guid: 35bffb26b415ebe46a41e73d9d06a5e5
+  - enabled: 1
     path: Assets/Scenes/NetworkingTest.unity
     guid: 0b929bc99dabe844885bc94428c0309c
   m_configObjects: {}
+  m_UseUCBPForAssetBundles: 0

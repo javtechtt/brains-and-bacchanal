@@ -10,7 +10,15 @@ using BrainsAndBacchanal.Protocol;
 namespace BrainsAndBacchanal.Net
 {
     /// <summary>
-    /// Raw WebSocket client for the Phase 3 benchmark server.
+    /// Raw WebSocket client, used by BOTH the Phase 3 benchmark and the Phase 4
+    /// production room lobby.
+    ///
+    /// Shared deliberately. D-014 chose raw WebSockets partly because this class
+    /// passed 29/29 checks plus an IL2CPP standalone build with zero
+    /// dependencies; writing a second client for production would throw that
+    /// evidence away and double the hand-rolled ack-correlation code that the
+    /// decision already counts as its ongoing cost. `RoomId` is the only thing
+    /// that differs between the two uses.
     ///
     /// Uses System.Net.WebSockets.ClientWebSocket — the standard .NET API that
     /// ships with Unity. NO THIRD-PARTY PACKAGE. docs/NETWORK_BENCHMARK.md flagged
@@ -138,6 +146,16 @@ namespace BrainsAndBacchanal.Net
         /// retry whose ack was lost comes back DUPLICATE_INTENT rather than
         /// silently reapplying.
         /// </summary>
+        /// <summary>
+        /// The room this client addresses its intents to.
+        ///
+        /// The benchmark server serves exactly one implicit session, so
+        /// "benchmark" is the right constant there. The production room service
+        /// serves many rooms at once and routes on this, so the Phase 4 Host
+        /// sets it to the real room id once the server mints one.
+        /// </summary>
+        public string RoomId { get; set; } = "benchmark";
+
         public async Task<IntentAck> SubmitAsync(
             string type, string payloadJson, string intentId = null, int timeoutMs = 10000)
         {
@@ -158,7 +176,7 @@ namespace BrainsAndBacchanal.Net
             var frame = WireFraming.BuildIntentFrame(
                 requestId,
                 intentId ?? Guid.NewGuid().ToString("N"),
-                "benchmark",
+                RoomId,
                 type,
                 payloadJson);
 

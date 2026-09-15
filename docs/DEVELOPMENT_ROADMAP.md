@@ -2,7 +2,7 @@
 
 Keep Claude Code working in small, verifiable stages.
 
-## Phase 1 — Project Foundation
+## Phase 1 — Project Foundation ✅ COMPLETE
 
 Build:
 - pnpm monorepo,
@@ -35,7 +35,7 @@ pnpm test
 pnpm build
 ```
 
-## Phase 2 — Protocol + Generic Game State
+## Phase 2 — Protocol + Generic Game State ✅ COMPLETE
 
 Define/build:
 - room/session model,
@@ -52,7 +52,7 @@ Define/build:
 
 No detailed rounds yet.
 
-## Phase 3 — Realtime Transport Comparison
+## Phase 3 — Realtime Transport Comparison ✅ COMPLETE
 
 Build equivalent minimal prototypes with:
 - Socket.IO,
@@ -74,7 +74,7 @@ No buzzers in Rounds 1–3.
 
 Select transport only after measurement.
 
-## Phase 4 — Lobby / Room / Teams
+## Phase 4 — Lobby / Room / Teams ✅ COMPLETE
 
 Build:
 - Host room creation,
@@ -88,7 +88,13 @@ Build:
 - connection state,
 - 2-team / 3-team setup.
 
-## Phase 5 — Generic Authoritative Engine
+All implemented. See `docs/LOBBY.md` for behaviour and the LAN test procedure.
+
+Not included, deliberately: durable room storage (in-memory only — a server
+restart destroys active rooms), lobby auto-pause (no gameplay to pause yet), any
+disconnect timeout, and any rule for a mid-game Host disconnect.
+
+## Phase 5 — Generic Authoritative Engine ◀ NEXT
 
 Build:
 - BB ledger,

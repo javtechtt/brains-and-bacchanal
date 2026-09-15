@@ -128,6 +128,11 @@ Never trust a client device's claimed time as the deciding time.
 
 ## 7. Realtime Transport
 
+**DECIDED — raw WebSockets. See `DECISION_LOG.md` D-014.**
+
+The comparison below was carried out in Phase 3 and is closed. Evidence:
+`docs/NETWORK_BENCHMARK.md`, `docs/UNITY_HOST.md`.
+
 Do not choose only from preference.
 
 Compare:
@@ -147,7 +152,19 @@ Measure:
 - LAN,
 - online behavior.
 
+Socket.IO remains installed for the benchmark tooling only. The production room
+service (`apps/game-server/src/rooms/`) imports it nowhere, and there is no
+transport selector on any production page. The `RealtimeTransport` adapter stays,
+so the decision is reversible.
+
+Production room socket: `/room/ws`. Benchmark: `/benchmark/ws`.
+
 ## 8. Persistence
+
+**CURRENT REALITY: rooms live in memory only. Restarting the game server
+destroys every active room — codes, players, teams and reconnect credentials.**
+There is no durable store yet. `RoomStore`
+(`packages/game-rules/src/room-store.ts`) is the seam where one goes.
 
 Recommended later:
 - PostgreSQL / Neon.

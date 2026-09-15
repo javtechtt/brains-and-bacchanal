@@ -113,3 +113,66 @@ mobile data, a captive portal, a specific hosting ingress, or if the Host ever
 needs WebGL (where `ClientWebSocket` does not work).
 
 Full evidence: `docs/NETWORK_BENCHMARK.md`, `docs/UNITY_HOST.md`.
+
+## D-015 — Stale Connections: Newest Authenticated Connection Wins
+When a player proves identity on a new connection while an older one is still
+open, the **new** connection becomes authoritative immediately. The old one is
+sent `CONNECTION_SUPERSEDED`, closed by the server, and stripped of its role so
+it can no longer act.
+
+Chosen over waiting for the old socket to time out, because the common case is a
+phone waking from sleep: the player is holding the device that just
+authenticated, and the old socket is a locked screen or a forgotten tab. Waiting
+would leave the player unable to act for as long as the timeout.
+
+A late `close` from a displaced socket is ignored, so it cannot mark a present
+player as away.
+
+This is engineering, not a game rule. See `docs/LOBBY.md`.
+
+## D-016 — Leave and Removal Destroy Membership; Disconnect Preserves It
+`LEAVE_ROOM` and `HOST_REMOVE_PLAYER` delete the player record, which
+invalidates the reconnect credential *by construction* — there is nothing left
+to authenticate against. A dropped socket does the opposite: membership, team
+and credential all survive.
+
+Prevents the two failure modes that matter: someone who left reappearing on a
+team, and someone whose phone died losing their place.
+
+## D-017 — Team-Mode Change 3 → 2 Is Refused, Never Silently Resolved
+If Team C holds players, switching to two-team mode is **rejected**, naming how
+many players are in the way. The Host moves them deliberately first.
+
+Silent reassignment is the kind of thing nobody notices until the game has
+started and someone is on the wrong team.
+
+## D-018 — Team Lock Requires Non-Empty Teams, Not Equal Ones
+Locking is refused if any participating team has zero players.
+
+**Team sizes are deliberately not checked.** No locked rule requires balance, so
+requiring it would be inventing a rule. Uneven teams lock successfully.
+
+`HOST_UNLOCK_TEAMS` exists so a misclick is recoverable; `TEAM_LOCK → LOBBY` was
+already a legal phase transition for exactly this reason.
+
+## D-019 — Room Codes Avoid Confusable Characters
+Four characters from `ABCDEFGHJKMNPQRTWXY346789` (390,625 combinations), unique
+among **active** rooms so codes recycle when rooms close.
+
+`O/0`, `I/1/L`, `S/5`, `U/V` and `Z/2` are excluded, and input folds confusables
+onto the intended character. This targets the failure that actually costs time at
+a party: someone typing the code wrong three times while everyone waits.
+
+## D-020 — QR Mask 2 Excluded from the Hand-Written Encoder
+`QrCode.cs` never selects mask 2, a deliberate deviation from ISO/IEC 18004's
+"lowest penalty wins".
+
+Mask 2 (`x % 3 == 0`) produces solid vertical stripes. Those codes are valid and
+this encoder builds them correctly, but OpenCV's detector failed to decode **13
+of 200** of them. Confirmed as a decoder-population problem rather than an
+encoding fault by forcing an independent reference encoder to mask 2 and watching
+it fail identically.
+
+Mask choice is a robustness heuristic, not a correctness requirement, and the
+other seven masks always include a good one. Verified by decoding, not
+inspection: `tools/qr-verify/` decodes **307/307**.

@@ -21,15 +21,33 @@ namespace BrainsAndBacchanal.EditorTools
     public static class StandaloneBuilder
     {
         private const string ScenePath = "Assets/Scenes/NetworkingTest.unity";
+        private const string LobbyScenePath = "Assets/Scenes/HostLobby.unity";
+
+        /// <summary>
+        /// Build the PHASE 4 Host lobby — the real Host application.
+        ///
+        /// Separate output directory from the benchmark build so both can exist
+        /// at once: Phase 3 tooling is kept, not replaced.
+        /// </summary>
+        [MenuItem("Brains & Bacchanal/Build Windows Host Lobby (IL2CPP)")]
+        public static void BuildLobbyIl2cpp()
+        {
+            Build(LobbyScenePath, "WindowsHostLobby", "BrainsAndBacchanalHost.exe");
+        }
 
         [MenuItem("Brains & Bacchanal/Build Windows Host (IL2CPP)")]
         public static void BuildWindowsIl2cpp()
         {
+            Build(ScenePath, "WindowsHost", "BrainsAndBacchanalHost.exe");
+        }
+
+        private static void Build(string scenePath, string folder, string exeName)
+        {
             var outputDir = Path.GetFullPath(Path.Combine(
-                Application.dataPath, "..", "Builds", "WindowsHost"));
+                Application.dataPath, "..", "Builds", folder));
             Directory.CreateDirectory(outputDir);
 
-            var exePath = Path.Combine(outputDir, "BrainsAndBacchanalHost.exe");
+            var exePath = Path.Combine(outputDir, exeName);
 
             // IL2CPP, 64-bit Windows.
             PlayerSettings.SetScriptingBackend(
@@ -45,7 +63,7 @@ namespace BrainsAndBacchanal.EditorTools
 
             var options = new BuildPlayerOptions
             {
-                scenes = new[] { ScenePath },
+                scenes = new[] { scenePath },
                 locationPathName = exePath,
                 target = BuildTarget.StandaloneWindows64,
                 targetGroup = BuildTargetGroup.Standalone,

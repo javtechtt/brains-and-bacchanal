@@ -23,3 +23,5 @@ export * from './transitions.js';
 export * from './event-log.js';
 export * from './idempotency.js';
 export * from './session.js';
+export * from './room.js';
+export * from './room-store.js';

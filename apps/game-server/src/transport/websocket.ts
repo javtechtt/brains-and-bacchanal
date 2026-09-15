@@ -30,8 +30,30 @@ import { isAuthorized } from '../benchmark/access.js';
  * detail.
  */
 
-/** Upgrade path this adapter claims. Socket.IO uses /benchmark/socketio. */
-const WS_PATH = '/benchmark/ws';
+/** Default upgrade path. Socket.IO uses /benchmark/socketio. */
+const DEFAULT_WS_PATH = '/benchmark/ws';
+
+/**
+ * Production room path. D-014 selected raw WebSockets, so this is the real
+ * game's transport; it is a separate path from the benchmark so that benchmark
+ * tooling and production rooms can never share a connection pool.
+ */
+export const ROOM_WS_PATH = '/room/ws';
+
+export interface WebSocketTransportOptions {
+  /** Upgrade path this adapter claims. Defaults to the benchmark path. */
+  readonly path?: string;
+  /** Dev-only shared secret. Null leaves the path open. */
+  readonly accessToken?: string | null;
+  /**
+   * Authorisation check. Defaults to the benchmark token gate.
+   *
+   * Injected so the production room path is NOT gated by a benchmark token:
+   * players scanning a QR code have no token, and requiring one would make the
+   * game unjoinable.
+   */
+  readonly authorize?: (url: string | undefined, token: string | null) => boolean;
+}
 
 /** Frame kinds on the wire. */
 const FRAME = {
@@ -55,7 +77,20 @@ export class WebSocketTransport implements RealtimeTransport {
   #connectHandler: ConnectionHandler | null = null;
   #disconnectHandler: ConnectionHandler | null = null;
 
-  constructor(httpServer: HttpServer, accessToken: string | null = null) {
+  readonly #path: string;
+  readonly #accessToken: string | null;
+  readonly #authorize: (url: string | undefined, token: string | null) => boolean;
+
+  constructor(httpServer: HttpServer, options: WebSocketTransportOptions | string | null = null) {
+    // Accepts the legacy positional token so existing benchmark callers keep
+    // working unchanged, while production passes an options object.
+    const opts: WebSocketTransportOptions =
+      options === null || typeof options === 'string' ? { accessToken: options } : options;
+
+    this.#path = opts.path ?? DEFAULT_WS_PATH;
+    this.#accessToken = opts.accessToken ?? null;
+    this.#authorize = opts.authorize ?? isAuthorized;
+    const accessToken = this.#accessToken;
     // `noServer` rather than `{ server }`: the benchmark process attaches BOTH
     // this adapter and the Socket.IO adapter to one HTTP server, and Socket.IO
     // installs its own `upgrade` listener. Letting `ws` also claim every
@@ -72,12 +107,12 @@ export class WebSocketTransport implements RealtimeTransport {
     // and therefore be measured under identical conditions.
     httpServer.prependListener('upgrade', (req, socket, head) => {
       const path = (req.url ?? '').split('?')[0];
-      if (path !== WS_PATH) return; // Not ours — leave it for Socket.IO.
+      if (path !== this.#path) return; // Not ours — leave it for Socket.IO.
 
       // Development-only door lock for public cloud testing — see
       // benchmark/access.ts. Refuse before the handshake completes, so an
       // unauthorised client never gets a socket. Null token means open.
-      if (!isAuthorized(req.url, accessToken)) {
+      if (!this.#authorize(req.url, accessToken)) {
         socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
         socket.destroy();
         return;
@@ -179,6 +214,15 @@ export class WebSocketTransport implements RealtimeTransport {
     for (const socket of this.#sockets.values()) {
       if (socket.readyState === 1) socket.send(payload);
     }
+  }
+
+  close(connectionId: ConnectionId): void {
+    const socket = this.#sockets.get(connectionId);
+    if (socket === undefined) return;
+    this.#sockets.delete(connectionId);
+    // 1000 = normal closure. The socket's own 'close' handler still fires and
+    // reports the disconnect, which is correct: the connection really did end.
+    socket.close(1000, 'Superseded');
   }
 
   onIntent(handler: IntentHandler): void {

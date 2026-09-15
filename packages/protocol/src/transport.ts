@@ -90,6 +90,16 @@ export interface RealtimeTransport {
   /** Deliver an event to every open connection. */
   broadcast(event: EventEnvelope): void;
 
+  /**
+   * Close one connection.
+   *
+   * Needed because the server sometimes must END a specific socket rather than
+   * wait for the client: when a player reconnects, the connection it replaces
+   * has to stop being able to act (Phase 4 stale-connection policy). Leaving it
+   * open would mean two sockets claiming one player identity.
+   */
+  close(connectionId: ConnectionId): void;
+
   /** Register the handler invoked when a client submits an intent. */
   onIntent(handler: IntentHandler): void;
 

@@ -106,6 +106,12 @@ export class SocketIOTransport implements RealtimeTransport {
     this.#io.emit('event', event);
   }
 
+  close(connectionId: ConnectionId): void {
+    // Implemented for interface parity. The production room service is raw
+    // WebSocket only (D-014), so nothing currently calls this on Socket.IO.
+    this.#io.sockets.sockets.get(connectionId)?.disconnect(true);
+  }
+
   onIntent(handler: IntentHandler): void {
     this.#intentHandler = handler;
   }

@@ -1,7 +1,7 @@
 # Brains & Bacchanal — Unity Host
 
-The Unity Host Display, and the Phase 3 test that proves Unity can act as a
-client of the authoritative game server.
+The Unity Host Display: the Phase 3 test that proved Unity can act as a client of
+the authoritative game server, and the Phase 4 Host lobby built on it.
 
 > **Status: COMPLETE. Unity raw WebSocket compatibility is proven.**
 >
@@ -9,6 +9,68 @@ client of the authoritative game server.
 > server**; both Mono and **IL2CPP** Windows standalone `.exe` builds succeed and
 > run cleanly with zero exceptions; and **real-device tests A–E all pass** with
 > two physical phones, the Unity Host and the browser Host on one session.
+
+---
+
+## Phase 4 — the Host lobby
+
+The first functional Host screen: create a room, show the code and a scannable
+QR, list players as they join, build teams, lock them.
+
+| | |
+|---|---|
+| **Scene** | `Assets/Scenes/HostLobby.unity` (startup scene) |
+| **Behaviour** | `Assets/Scripts/HostLobby.cs` |
+| **DTOs** | `Assets/Scripts/Protocol/RoomMessages.cs` |
+| **QR encoder** | `Assets/Scripts/Util/QrCode.cs` |
+| **Socket** | `ws://<host>:4000/room/ws` |
+
+### Results
+
+| Check | Result |
+|---|---|
+| C# compilation (batch mode) | **PASS** — 0 errors |
+| Headless lobby check vs live compiled server | **PASS — 47/47** |
+| IL2CPP Windows standalone build | **PASS** — 0 errors, 0 warnings, 2m23s |
+| Standalone `.exe` runs | **PASS** — no exceptions, clean D3D12 init |
+| QR decoded by a real scanner | **PASS — 307/307** (`tools/qr-verify/`) |
+
+`HeadlessLobbyCheck.cs` runs the SAME client, DTOs and QR encoder the scene uses,
+against the real production server. It covers room creation, the join flow,
+credential secrecy on broadcasts, Host-authority rejection, team assignment,
+three-team mode, lock validation, Host reconnect to the same room, and rejection
+of a forged Host credential.
+
+```
+Unity.exe -batchmode -quit -nographics -projectPath unity/host \
+  -executeMethod BrainsAndBacchanal.EditorTools.HeadlessLobbyCheck.Run
+```
+
+### The QR encoder is hand-written, and verified by decoding
+
+Unity ships no QR encoder, and D-014 deliberately avoids third-party C# packages
+in the Host. `QrCode.cs` implements ISO/IEC 18004 byte mode at EC level M.
+
+**Generating an image proves nothing.** `tools/qr-verify/` renders the output and
+decodes it with OpenCV. That caught three real bugs, none visible by inspection —
+format bits in the wrong modules (every code unreadable), a one-sided mask
+penalty rule, and mask 2 producing valid-but-poorly-scanning codes (D-020).
+
+### Reused, not rewritten
+
+`BenchmarkWebSocketClient` serves both the benchmark and the production lobby;
+only its `RoomId` differs. Writing a second client would have discarded the
+29/29 evidence that justified D-014 and doubled the hand-rolled ack-correlation
+code that decision already counts as its ongoing cost.
+
+### Not yet done
+
+- **The standalone `.exe` has not been driven through a full game by hand.** It
+  launches and initialises cleanly, but creating a room needs a button press, so
+  the end-to-end proof for the standalone rests on the Editor check exercising
+  the identical code path.
+- No presentation work: no artwork, animation, sound or branded layout. IMGUI
+  only. That is Phase 8.
 
 ---
 
@@ -343,7 +405,11 @@ C# compiled cleanly in batch mode, **zero errors**, and
 `BenchmarkSceneBuilder.Build` generated `Assets/Scenes/NetworkingTest.unity` and
 registered it as the build scene (Unity exit code 0).
 
-### Editor runtime — NOT COMPLETED
+### Editor runtime — NOT COMPLETED *(SUPERSEDED — historical)*
+
+> **This entry is an earlier snapshot, kept for the record. It was superseded by
+> "Editor runtime — PASS (27/27)" above, and finally by the 29/29 run cited in
+> the status block at the top of this file. Do not read it as current status.**
 
 The headless end-to-end check (`HeadlessNetworkCheck.cs`) was written and one run
 attempted. That run surfaced the deadlock described above; after fixing it, the
@@ -357,7 +423,11 @@ server's client list, unknown intent rejected with a structured code, duplicate
 `intentId` rejected as `DUPLICATE_INTENT`, clean disconnect, reconnect, fresh
 state after reconnect, and **no duplicate Unity identity created**.
 
-### Windows standalone — NOT COMPLETED
+### Windows standalone — NOT COMPLETED *(SUPERSEDED — historical)*
+
+> **Superseded.** The missing build module was installed and a Windows SDK
+> added; both Mono and IL2CPP standalone builds now succeed and run. See the
+> status block at the top of this file.
 
 Blocked on the missing build module.
 

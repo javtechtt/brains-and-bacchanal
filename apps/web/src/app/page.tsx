@@ -5,13 +5,13 @@ import { COLOR, FONT_SIZE, RADIUS, SPACING } from '@bb/ui-tokens';
 import type { HealthResponse } from '@bb/protocol';
 
 /**
- * Phase 1 health check page.
+ * Health check and entry point.
  *
  * DEVELOPMENT_ROADMAP.md Phase 1 — "simple web health check".
  *
- * This page exists to prove the web app builds, imports shared packages and can
- * reach the game server. It is NOT the player controller. Room joining, team
- * assignment and the player UI are Phase 4.
+ * Players reach the game at /join/<ROOMCODE>, normally by scanning the QR code
+ * on the Unity Host display; /join accepts a typed code as a fallback. This page
+ * is a development landing spot, not the player controller.
  */
 
 const SERVER_URL = process.env['NEXT_PUBLIC_GAME_SERVER_URL'] ?? 'http://localhost:4000';
@@ -108,8 +108,22 @@ export default function HomePage() {
         </button>
       </section>
 
-      <p style={{ marginTop: SPACING.xl, color: COLOR.textSecondary, fontSize: FONT_SIZE.sm }}>
-        Phase 1 foundation. No gameplay is implemented yet.
+      <p style={{ marginTop: SPACING.xl }}>
+        <a
+          href="/join"
+          style={{
+            color: COLOR.accent,
+            fontSize: FONT_SIZE.md,
+            textDecoration: 'none',
+            fontWeight: 500,
+          }}
+        >
+          Join a game →
+        </a>
+      </p>
+
+      <p style={{ marginTop: SPACING.md, color: COLOR.textSecondary, fontSize: FONT_SIZE.sm }}>
+        Phase 4 lobby. Rooms, players and teams work; no gameplay rounds yet.
       </p>
     </main>
   );

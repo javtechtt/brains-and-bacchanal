@@ -72,6 +72,13 @@ Before Bacchanal dealing/eligibility is finalized, the project owner must decide
 
 Claude must not decide.
 
+**Owner instruction (Phase 4): leave it out for now. If it is never resolved, it does not go in the deck.**
+
+This DEFERS the question; it does not answer it. When card dealing is built
+(Phase 6), Maco! is simply absent from the starting pool — no eligibility rule
+is invented for it, and it is not quietly given a legal challenge. The rule stays
+open here in case the owner later wants to rework it.
+
 ## 8. Family Feud — Steups Board Behavior
 
 Steups is approved for Family Feud, but exact board behavior is not fully defined.

@@ -62,6 +62,37 @@ export class EventLog {
     return event;
   }
 
+  /**
+   * Build a one-off notice addressed to a single connection.
+   *
+   * It does NOT consume a sequence number and does NOT enter history.
+   *
+   * That matters for the meaning of the sequence: a number is issued only for an
+   * accepted change to shared room state, so a gap continues to mean "you missed
+   * a state change". A notice like CONNECTION_SUPERSEDED is neither — it is a
+   * courtesy to one displaced socket about to be closed, invisible to and
+   * irrelevant for every other client. Numbering it would create a gap in every
+   * other client's stream describing something that never changed the room.
+   *
+   * It reuses the current sequence number so the recipient can still place the
+   * notice against the state it already has.
+   */
+  buildTransient<TType extends string, TPayload>(
+    type: TType,
+    actor: Actor,
+    payload: TPayload,
+  ): EventEnvelope<TType, TPayload> {
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      seq: this.latestSeq(),
+      serverTime: asServerTimestamp(this.#clock.now()),
+      roomId: this.#roomId,
+      actor,
+      type,
+      payload,
+    };
+  }
+
   /** All events in sequence order. */
   all(): readonly EventEnvelope[] {
     return [...this.#events];

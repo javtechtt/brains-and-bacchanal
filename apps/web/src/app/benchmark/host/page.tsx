@@ -119,6 +119,11 @@ export default function BenchmarkHostPage() {
             <label key={choice} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
               <input
                 type="radio"
+                // Without a shared `name`, the browser treats each radio as its
+                // own group: both render checked and clicking one never clears
+                // the other, so the transport could not actually be changed.
+                name="bb-transport"
+                value={choice}
                 checked={transport === choice}
                 onChange={() => setTransport(choice)}
               />

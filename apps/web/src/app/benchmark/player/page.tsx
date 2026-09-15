@@ -120,7 +120,16 @@ export default function BenchmarkPlayerPage() {
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           {(['socketio', 'websocket'] as const).map((choice) => (
             <label key={choice} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-              <input type="radio" checked={transport === choice} onChange={() => setTransport(choice)} />
+              {/* `name` groups these: without it the browser treats each radio
+                  as its own group, so both render checked and the transport
+                  cannot be changed. */}
+              <input
+                type="radio"
+                name="bb-transport"
+                value={choice}
+                checked={transport === choice}
+                onChange={() => setTransport(choice)}
+              />
               {choice}
             </label>
           ))}

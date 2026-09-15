@@ -53,6 +53,11 @@ namespace BrainsAndBacchanal
 
         private void Awake()
         {
+            // Let a standalone build target a different server without rebuilding:
+            //   BrainsAndBacchanalHost.exe --bb-host 192.168.50.62 --bb-port 4500
+            // or via the BB_BENCH_HOST / BB_BENCH_PORT environment variables.
+            ApplyServerOverrides();
+
             // Persisted so a domain reload or a restart reclaims the same identity,
             // which is what makes the "no duplicate Unity Host" check meaningful.
             _identity = PlayerPrefs.GetString("bb-unity-host-id", string.Empty);
@@ -61,6 +66,35 @@ namespace BrainsAndBacchanal
                 _identity = "unity-host-" + Guid.NewGuid().ToString("N").Substring(0, 8);
                 PlayerPrefs.SetString("bb-unity-host-id", _identity);
                 PlayerPrefs.Save();
+            }
+        }
+
+        /// <summary>
+        /// Read server host/port from command line or environment.
+        ///
+        /// A standalone build has no Inspector, so without this the .exe would be
+        /// pinned to whatever was serialised into the scene — which makes testing
+        /// it against a LAN address impossible without a rebuild.
+        /// </summary>
+        private void ApplyServerOverrides()
+        {
+            var args = Environment.GetCommandLineArgs();
+            for (var i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "--bb-host") serverHost = args[i + 1];
+                else if (args[i] == "--bb-port" && int.TryParse(args[i + 1], out var cliPort))
+                {
+                    serverPort = cliPort;
+                }
+            }
+
+            var envHost = Environment.GetEnvironmentVariable("BB_BENCH_HOST");
+            if (!string.IsNullOrEmpty(envHost)) serverHost = envHost;
+
+            var envPort = Environment.GetEnvironmentVariable("BB_BENCH_PORT");
+            if (!string.IsNullOrEmpty(envPort) && int.TryParse(envPort, out var port))
+            {
+                serverPort = port;
             }
         }
 

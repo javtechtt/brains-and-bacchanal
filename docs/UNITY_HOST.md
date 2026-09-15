@@ -3,10 +3,12 @@
 The Unity Host Display, and the Phase 3 test that proves Unity can act as a
 client of the authoritative game server.
 
-> **Status: Unity compatibility testing is INCOMPLETE.**
-> The project, the C# protocol layer and the NetworkingTest scene are built and
-> compile cleanly. The Editor runtime test and the Windows standalone build have
-> **not** been completed — see [Blockers](#blockers). Until they are, the Phase 3
+> **Status: raw WebSocket compatibility is PROVEN. IL2CPP build is BLOCKED.**
+>
+> The Editor runtime test passes **27/27 checks against the live benchmark
+> server**, and a Mono Windows standalone `.exe` builds and runs cleanly. The
+> **IL2CPP** build is blocked on a missing Windows SDK, and the real-device
+> phone tests have not yet been run. Until those are done, the Phase 3
 > transport decision stays **OPEN**.
 
 ---
@@ -24,16 +26,28 @@ purpose.
 
 | | |
 |---|---|
-| **Version** | `6000.6.0f1` (Unity 6.3) |
-| **Path** | `C:\Program Files\Unity\Hub\Editor\6000.6.0f1\Editor\Unity.exe` |
+| **Version** | `6000.3.24f1` (Unity 6.3 LTS) |
+| **Path** | `G:\Programs\Unity\Hub\Editor\6000.3.24f1\Editor\Unity.exe` |
+| **Install size** | 13.67 GB |
 | **License** | Unity Personal — valid, active |
-| **Chosen because** | It is the only version installed; there was no choice to make |
+| **Build support** | Windows Standalone with **IL2CPP** and Mono (plus WebGL) |
+| **Chosen because** | The only version installed; there was no choice to make |
 
-**Worth knowing:** 6000.6 is a Tech/Supported release, **not an LTS**. The Unity 6
-LTS line is 6000.0. For a Host application maintained over years, an LTS is
-usually the better base. This does not block the Phase 3 test, but it is a
-decision worth taking deliberately before Phase 8 rather than inheriting by
-accident.
+Note the install is on **G:**, not the default `C:\Program Files` — Unity Hub is
+configured with a secondary install path (`%APPDATA%\UnityHub\secondaryInstallPath.json`).
+Anything scripting the Editor must not assume the default location.
+
+### History worth keeping
+
+An earlier install of `6000.6.0f1` was **broken**: `UnityPackageManager.exe` was
+missing from an otherwise complete 5.85 GB install (a normal launch exited 1),
+and no build support module was present at all. It was replaced with the
+13.67 GB `6000.3.24f1` LTS install documented above. Both problems are resolved:
+Package Manager connects and resolves packages, and IL2CPP is available.
+
+The project's `ProjectSettings/ProjectVersion.txt` was repinned from
+`6000.6.0f1` to `6000.3.24f1`, and the stale `Library/` from the old Editor was
+deleted so the project reimports cleanly.
 
 ## Project location and structure
 
@@ -239,6 +253,62 @@ The Editor was being reinstalled when this document was written.
 
 ## Results
 
+### Editor runtime — PASS (27/27)
+
+`HeadlessNetworkCheck` run against the live benchmark server on
+`ws://127.0.0.1:4500/benchmark/ws`: **checks=27 failures=0**.
+
+Every point of the Phase 3 raw-WebSocket checklist verified:
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Unity connects | PASS |
+| 2 | Protocol version correct | PASS |
+| 3 | Server events deserialize | PASS (envelope + payload) |
+| 4 | Sequence numbers correct | PASS |
+| 5 | Server timestamps correct | PASS (ms precision, `long`) |
+| 6 | Authoritative snapshot received | PASS (in `CLIENT_JOINED` and on request) |
+| 7 | Sees connected benchmark players | PASS (`clients` array parsed; self present) |
+| 8 | Sees timer state | PASS |
+| 9 | Sees pause/resume state | PASS (observed `phase=PAUSED`) |
+| 10 | Receives server-selected buzzer winner | PASS (`acceptedBuzz` field parsed) |
+| 11 | Disconnects cleanly | PASS |
+| 12 | Reconnects cleanly | PASS |
+| 13 | Reconnect restores current state | PASS (`reconnected: true` + fresh snapshot) |
+| 14 | No duplicate Unity Host identity | PASS (exactly 1 entry for the identity) |
+
+Also verified: an unknown intent is rejected with a structured code, and a
+repeated `intentId` comes back `DUPLICATE_INTENT`.
+
+### Windows standalone — Mono PASS, IL2CPP BLOCKED
+
+**Mono:** builds (123 MB, 0 errors) and the `.exe` **runs cleanly** — window
+opens, D3D11 initialises, no exceptions in the player log.
+
+**IL2CPP: BLOCKED.**
+
+```text
+Could not set up a toolchain for Architecture x64.
+IL2CPP C++ code builder is unable to build C++ code.
+```
+
+IL2CPP transpiles C# to C++ and therefore needs a **C++ toolchain beyond Unity's
+own build-support module**. On this machine:
+
+- MSVC compiler **present** — Visual Studio Community 2026, MSVC 14.51.36231
+- Windows 10/11 SDK **missing** — `C:\Program Files (x86)\Windows Kits\10`
+  contains only `UnionMetadata`; there is no `Include\` or `Lib\`
+
+Fix: in the **Visual Studio Installer**, modify VS 2026 → Individual components →
+add a **Windows 11 SDK** (and confirm *MSVC v143+ x64/x86 build tools*).
+
+**A Mono pass does not substitute for IL2CPP.** IL2CPP/AOT is exactly where
+managed-code stripping and missing AOT generics can break a reflection-based
+JSON path that works fine under Mono — and `JsonUtility` reflects over these
+DTOs. The IL2CPP build must be run before the Host is considered proven.
+(`ManagedStrippingLevel.Minimal` is already set in the builder to reduce, but
+not eliminate, that risk.)
+
 ### Compilation — PASS
 
 C# compiled cleanly in batch mode, **zero errors**, and
@@ -268,6 +338,64 @@ Blocked on the missing build module.
 Tests A (players), B (timer), C (phone lock / auto-pause), D (buzzer) and
 E (Unity reconnect) require the Editor or a standalone build running against the
 benchmark server alongside real phones.
+
+## Bugs found by running it (not by compiling it)
+
+Both were caught by the headless check against the real server, and neither
+would have been caught by "the C# compiles".
+
+### 1. JSON field-name matching hit a false positive
+
+Every acknowledgement failed with `MALFORMED_ACK` while the connection itself
+looked perfectly healthy. Cause: an ack frame is
+
+```json
+{"kind":"ack","requestId":"probe-1","ack":{"ok":true,"seq":7}}
+```
+
+The text `"ack"` appears **twice** — first as the *value* of `kind`, then as the
+real field. `ExtractObject` matched the first occurrence, found a comma where an
+object should be, and returned null.
+
+Fixed with `FindValueStart`, which keeps scanning until a match is followed by
+`:` — the thing that actually distinguishes a field key from a string value.
+
+### 2. Unity main-thread deadlock
+
+The first headless run connected, printed nothing further and hung until killed.
+Blocking Unity's main thread while awaiting continuations that want to return to
+it is a deadlock. Fixed with `ConfigureAwait(false)` on every await in the client
+plus running the check body on a thread-pool thread.
+
+Worth knowing before anyone writes `.Result` in Unity code.
+
+## Environment problems encountered (not code faults)
+
+Recorded because they cost real time and will recur:
+
+1. **Unity Hub holds the licensing mutex.** The Editor spawns its own
+   `Unity.Licensing.Client`, which cannot acquire the global mutex
+   `Unity-LicenseClient-Javal` while Hub's own client holds it:
+
+   ```text
+   Failed to acquire global mutex Unity-LicenseClient-Javal.
+   Another instance of Unity.Licensing.Client is already running.
+   ```
+
+   The Editor then waits forever on a channel nobody opened, in **both** batch
+   and GUI mode, surfacing the misleading
+   `'com.unity.editor.headless' was not found` (the entitlement **is** granted —
+   the full licence dump confirms it; it was being queried through a dead
+   connection).
+
+   **Workaround: fully quit Unity Hub — including the system-tray icon — before
+   launching the Editor from its own `.exe`.** Hub's client cannot be killed
+   while Hub is its parent. This reproduced after a clean reboot, so it is not a
+   stale process.
+
+2. An earlier `6000.6.0f1` install was corrupt (missing
+   `UnityPackageManager.exe`, no build-support module). Replaced by the
+   `6000.3.24f1` LTS install documented above.
 
 ## Dependencies introduced
 

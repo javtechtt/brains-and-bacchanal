@@ -135,13 +135,8 @@ namespace BrainsAndBacchanal.Protocol
         {
             if (string.IsNullOrEmpty(json)) return null;
 
-            var key = "\"" + fieldName + "\"";
-            var keyIndex = json.IndexOf(key, StringComparison.Ordinal);
-            if (keyIndex < 0) return null;
-
-            var i = keyIndex + key.Length;
-            while (i < json.Length && (json[i] == ' ' || json[i] == ':')) i++;
-            if (i >= json.Length) return null;
+            var i = FindValueStart(json, fieldName);
+            if (i < 0) return null;
 
             var open = json[i];
             if (open != '{' && open != '[')
@@ -175,18 +170,55 @@ namespace BrainsAndBacchanal.Protocol
             return null;
         }
 
+        /// <summary>
+        /// Find where a field's VALUE starts, or -1.
+        ///
+        /// Must distinguish a field NAME from a string VALUE that happens to
+        /// equal that name. This is not hypothetical: an ack frame is
+        ///
+        ///     {"kind":"ack","requestId":"probe-1","ack":{"ok":true,"seq":7}}
+        ///
+        /// where the text "ack" appears twice — first as the VALUE of `kind`,
+        /// then as the real field. Matching the first occurrence found a comma
+        /// where an object should be and returned null, so every acknowledgement
+        /// failed to parse with MALFORMED_ACK while the connection itself
+        /// looked healthy. Caught by the headless check against the real server.
+        ///
+        /// A genuine field key is always followed (after optional whitespace) by
+        /// a colon, so keep scanning until that holds.
+        /// </summary>
+        private static int FindValueStart(string json, string fieldName)
+        {
+            var key = "\"" + fieldName + "\"";
+            var from = 0;
+
+            while (true)
+            {
+                var keyIndex = json.IndexOf(key, from, StringComparison.Ordinal);
+                if (keyIndex < 0) return -1;
+
+                var i = keyIndex + key.Length;
+                while (i < json.Length && json[i] == ' ') i++;
+
+                if (i < json.Length && json[i] == ':')
+                {
+                    i++;
+                    while (i < json.Length && json[i] == ' ') i++;
+                    return i < json.Length ? i : -1;
+                }
+
+                // Was a string value, not a key. Keep looking.
+                from = keyIndex + key.Length;
+            }
+        }
+
         /// <summary>Read a top-level string field. Returns null when absent.</summary>
         public static string ReadStringField(string json, string fieldName)
         {
             if (string.IsNullOrEmpty(json)) return null;
 
-            var key = "\"" + fieldName + "\"";
-            var keyIndex = json.IndexOf(key, StringComparison.Ordinal);
-            if (keyIndex < 0) return null;
-
-            var i = keyIndex + key.Length;
-            while (i < json.Length && (json[i] == ' ' || json[i] == ':')) i++;
-            if (i >= json.Length || json[i] != '"') return null;
+            var i = FindValueStart(json, fieldName);
+            if (i < 0 || json[i] != '"') return null;
 
             i++;
             var sb = new System.Text.StringBuilder();

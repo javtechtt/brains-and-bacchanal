@@ -1,0 +1,25 @@
+# Keep the build context small and free of local state.
+# The Dockerfile copies only what the benchmark server needs anyway; this
+# stops multi-GB directories being uploaded to the cloud builder.
+
+node_modules
+**/node_modules
+**/dist
+**/.next
+**/*.tsbuildinfo
+coverage
+
+# Unity: Library/ and Builds/ alone are several GB and are irrelevant here.
+unity
+
+.git
+.github
+docs
+.claude
+
+# Never ship secrets or local env into an image.
+.env
+.env.*
+!.env.example
+
+*.log

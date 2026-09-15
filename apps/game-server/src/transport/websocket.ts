@@ -11,6 +11,7 @@ import {
   type IntentHandler,
   type RealtimeTransport,
 } from '@bb/protocol';
+import { isAuthorized } from '../benchmark/access.js';
 
 /**
  * Raw WebSocket transport adapter.
@@ -54,7 +55,7 @@ export class WebSocketTransport implements RealtimeTransport {
   #connectHandler: ConnectionHandler | null = null;
   #disconnectHandler: ConnectionHandler | null = null;
 
-  constructor(httpServer: HttpServer) {
+  constructor(httpServer: HttpServer, accessToken: string | null = null) {
     // `noServer` rather than `{ server }`: the benchmark process attaches BOTH
     // this adapter and the Socket.IO adapter to one HTTP server, and Socket.IO
     // installs its own `upgrade` listener. Letting `ws` also claim every
@@ -72,6 +73,15 @@ export class WebSocketTransport implements RealtimeTransport {
     httpServer.prependListener('upgrade', (req, socket, head) => {
       const path = (req.url ?? '').split('?')[0];
       if (path !== WS_PATH) return; // Not ours — leave it for Socket.IO.
+
+      // Development-only door lock for public cloud testing — see
+      // benchmark/access.ts. Refuse before the handshake completes, so an
+      // unauthorised client never gets a socket. Null token means open.
+      if (!isAuthorized(req.url, accessToken)) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+        return;
+      }
 
       this.#wss.handleUpgrade(req, socket, head, (ws) => {
         this.#wss.emit('connection', ws, req);

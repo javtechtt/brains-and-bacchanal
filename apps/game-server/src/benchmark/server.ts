@@ -6,6 +6,7 @@ import { SystemClock, type Clock } from '@bb/game-rules';
 import { SocketIOTransport } from '../transport/socketio.js';
 import { WebSocketTransport } from '../transport/websocket.js';
 import { BenchmarkSession } from './session.js';
+import { isAuthorized } from './access.js';
 
 /**
  * Benchmark server.
@@ -27,7 +28,11 @@ export interface BenchmarkServer {
   lanUrls(port: number): string[];
 }
 
-export function createBenchmarkServer(logger: Logger, clock: Clock = new SystemClock()): BenchmarkServer {
+export function createBenchmarkServer(
+  logger: Logger,
+  clock: Clock = new SystemClock(),
+  accessToken: string | null = null,
+): BenchmarkServer {
   const session = new BenchmarkSession(clock);
 
   const httpServer = createServer((req, res) => {
@@ -52,6 +57,15 @@ export function createBenchmarkServer(logger: Logger, clock: Clock = new SystemC
     }
 
     if (req.method === 'GET' && url.startsWith('/benchmark/state')) {
+      // Gated like the sockets: this returns full session state, including
+      // every connected client. /health stays open so a cloud platform's
+      // probe can reach it without the token.
+      if (!isAuthorized(url, accessToken)) {
+        res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: 'UNAUTHORIZED' }));
+        return;
+      }
+
       res.writeHead(200, {
         'content-type': 'application/json; charset=utf-8',
         'access-control-allow-origin': '*',
@@ -65,8 +79,8 @@ export function createBenchmarkServer(logger: Logger, clock: Clock = new SystemC
   });
 
   const transports: RealtimeTransport[] = [
-    new SocketIOTransport(httpServer),
-    new WebSocketTransport(httpServer),
+    new SocketIOTransport(httpServer, accessToken),
+    new WebSocketTransport(httpServer, accessToken),
   ];
 
   for (const transport of transports) {

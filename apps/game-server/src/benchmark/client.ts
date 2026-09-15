@@ -34,6 +34,13 @@ export interface ClientOptions {
   readonly benchmarkClientId: string;
   readonly isHost: boolean;
   readonly label?: string;
+  /**
+   * Development-only access token, required when the server sets
+   * BENCHMARK_ACCESS_TOKEN (used for public cloud testing). Omit for LAN.
+   */
+  readonly accessToken?: string;
+  /** Use wss:// and https:// — required behind a cloud TLS ingress. */
+  readonly secure?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -56,8 +63,17 @@ export class SocketIOBenchmarkClient implements BenchmarkClient {
 
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      const socket = io(`http://${this.#options.host}:${this.#options.port}`, {
+      const scheme = this.#options.secure === true ? 'https' : 'http';
+      const origin = this.#options.port === 0
+        ? `${scheme}://${this.#options.host}`
+        : `${scheme}://${this.#options.host}:${this.#options.port}`;
+
+      const socket = io(origin, {
         path: '/benchmark/socketio',
+        // Checked at the handshake by the server's allowRequest hook.
+        query: this.#options.accessToken === undefined
+          ? {}
+          : { token: this.#options.accessToken },
         transports: ['websocket'],
         forceNew: true,
         reconnection: false,
@@ -158,7 +174,7 @@ export class WebSocketBenchmarkClient implements BenchmarkClient {
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       const socket = new WebSocket(
-        `ws://${this.#options.host}:${this.#options.port}/benchmark/ws`,
+        buildWsUrl(this.#options),
       );
       this.#socket = socket;
 
@@ -268,4 +284,21 @@ export function createBenchmarkClient(
   return kind === 'socketio'
     ? new SocketIOBenchmarkClient(options)
     : new WebSocketBenchmarkClient(options);
+}
+
+/**
+ * Build the raw-WebSocket URL, honouring TLS and the development access token.
+ *
+ * Port 0 means "use the scheme default", which is what a cloud ingress on
+ * 443 needs — an explicit :0 would not resolve.
+ */
+function buildWsUrl(options: ClientOptions): string {
+  const scheme = options.secure === true ? 'wss' : 'ws';
+  const authority = options.port === 0
+    ? options.host
+    : `${options.host}:${options.port}`;
+  const query = options.accessToken === undefined
+    ? ''
+    : `?token=${encodeURIComponent(options.accessToken)}`;
+  return `${scheme}://${authority}/benchmark/ws${query}`;
 }

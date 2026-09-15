@@ -10,6 +10,7 @@ import {
   type IntentHandler,
   type RealtimeTransport,
 } from '@bb/protocol';
+import { isAuthorized } from '../benchmark/access.js';
 
 /**
  * Socket.IO transport adapter.
@@ -30,8 +31,14 @@ export class SocketIOTransport implements RealtimeTransport {
   #connectHandler: ConnectionHandler | null = null;
   #disconnectHandler: ConnectionHandler | null = null;
 
-  constructor(httpServer: HttpServer) {
+  constructor(httpServer: HttpServer, accessToken: string | null = null) {
     this.#io = new SocketIOServer(httpServer, {
+      // Reject unauthorised handshakes before a socket exists. Development-only
+      // door lock for public cloud testing — see benchmark/access.ts. Null token
+      // means open, which is how LAN testing has always run.
+      allowRequest: (req, callback) => {
+        callback(null, isAuthorized(req.url, accessToken));
+      },
       path: '/benchmark/socketio',
       // Benchmark tooling is development-only and may be opened from a phone
       // on the LAN. See docs/NETWORK_BENCHMARK.md for the safety note.

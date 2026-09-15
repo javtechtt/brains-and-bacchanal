@@ -1,0 +1,57 @@
+# Benchmark server container — DEVELOPMENT ONLY.
+#
+# Built solely for Phase 3 cloud transport testing: it answers whether raw
+# WebSockets survive a real cloud ingress (TLS termination, HTTP/1.1 upgrade
+# through a proxy, idle timeouts) as well as Socket.IO, which carries an HTTP
+# long-polling fallback for exactly those conditions.
+#
+# This is NOT the production game server image. The game server has its own
+# entry point (apps/game-server/src/index.ts) and is never started here; the
+# benchmark entry point is deliberately separate so benchmark tooling cannot be
+# launched by a production process.
+#
+# Tear the deployment down when testing is finished — see docs/NETWORK_BENCHMARK.md.
+
+# ---- build ----------------------------------------------------------------
+FROM node:22-alpine AS build
+
+WORKDIR /repo
+
+RUN corepack enable
+
+# Copy only what the build needs, so the layer cache survives source edits.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY packages/protocol/package.json      packages/protocol/
+COPY packages/game-rules/package.json    packages/game-rules/
+COPY packages/ui-tokens/package.json     packages/ui-tokens/
+COPY apps/game-server/package.json       apps/game-server/
+
+# apps/web is intentionally NOT installed: the benchmark server is a Node
+# process with no need for Next.js, and skipping it keeps the image far smaller.
+RUN pnpm install --frozen-lockfile --filter "@bb/game-server..." --filter "!@bb/web"
+
+COPY packages/ packages/
+COPY apps/game-server/ apps/game-server/
+
+RUN pnpm --filter "./packages/**" build && pnpm --filter @bb/game-server build
+
+# ---- runtime --------------------------------------------------------------
+FROM node:22-alpine AS runtime
+
+WORKDIR /repo
+ENV NODE_ENV=production
+
+# Container Apps routes external traffic to this port.
+ENV BENCHMARK_PORT=8080
+EXPOSE 8080
+
+COPY --from=build /repo/node_modules                  ./node_modules
+COPY --from=build /repo/packages                      ./packages
+COPY --from=build /repo/apps/game-server/dist         ./apps/game-server/dist
+COPY --from=build /repo/apps/game-server/node_modules ./apps/game-server/node_modules
+COPY --from=build /repo/apps/game-server/package.json ./apps/game-server/
+
+# Run unprivileged. The node image ships a `node` user for this.
+USER node
+
+CMD ["node", "apps/game-server/dist/benchmark/index.js"]

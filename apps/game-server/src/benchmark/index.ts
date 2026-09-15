@@ -1,6 +1,7 @@
 import { loadConfig } from '../config.js';
 import { createLogger } from '../logger.js';
 import { createBenchmarkServer } from './server.js';
+import { configuredToken } from './access.js';
 
 /**
  * Benchmark server entry point — DEVELOPMENT ONLY.
@@ -13,7 +14,10 @@ const config = loadConfig();
 const logger = createLogger(config);
 const port = Number(process.env['BENCHMARK_PORT'] ?? 4500);
 
-const server = createBenchmarkServer(logger);
+// Development-only access token for public/cloud testing. Unset means open,
+// which is how LAN testing has always run. See benchmark/access.ts.
+const accessToken = configuredToken();
+const server = createBenchmarkServer(logger, undefined, accessToken);
 
 async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, 'benchmark server shutting down');
@@ -43,6 +47,10 @@ server
     for (const url of lan) {
       console.log(`  On LAN:     ${url}/health`);
     }
+    console.log('');
+    console.log(accessToken === null
+      ? '  Access:     OPEN (no token) - suitable for LAN only'
+      : '  Access:     TOKEN REQUIRED (?token=... on every connection)');
     console.log('');
     console.log('  Open the benchmark pages from the web app:');
     console.log('    Host:     http://<this-machine>:3000/benchmark/host');

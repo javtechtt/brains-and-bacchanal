@@ -152,10 +152,33 @@ export interface BenchmarkPausedPayload {
   readonly disconnectedClientId?: string;
 }
 
+/**
+ * Which realtime transport a benchmark connection is currently using.
+ *
+ * Recorded per client (not assumed for the whole session) precisely because a
+ * benchmark server accepts both adapters at once: the Host browser and each
+ * phone independently choose Socket.IO or raw WebSocket, and — as real
+ * two-phone LAN testing showed — nothing stops them from choosing differently
+ * from one another while still interacting correctly through the shared
+ * session. That is a genuine, intentional property of the architecture (both
+ * adapters feed one BenchmarkSession); it is also easy to mistake for a valid
+ * transport-vs-transport comparison when it is actually a mixed sample. This
+ * field, and the summary below, exist so that distinction is visible rather
+ * than assumed.
+ */
+export type BenchmarkTransportKind = 'socketio' | 'websocket';
+
+/** Per-session count of connected clients by transport, and whether they mix. */
+export interface BenchmarkTransportSummary {
+  readonly socketio: number;
+  readonly websocket: number;
+  /** True when at least one connected client uses each transport. */
+  readonly mixed: boolean;
+}
+
 /** Everything a benchmark UI needs to render current state. */
 export interface BenchmarkSnapshotPayload {
   readonly protocolVersion: number;
-  readonly transport: string;
   readonly seq: number;
   readonly serverTime: number;
   readonly phase: string;
@@ -172,10 +195,13 @@ export interface BenchmarkSnapshotPayload {
     readonly remainingMs: number;
     readonly paused: boolean;
   };
+  readonly transports: BenchmarkTransportSummary;
   readonly clients: readonly {
     readonly benchmarkClientId: string;
     readonly connected: boolean;
     readonly isHost: boolean;
     readonly label: string;
+    /** Null only for a client that has never sent HELLO through a live connection. */
+    readonly transport: BenchmarkTransportKind | null;
   }[];
 }

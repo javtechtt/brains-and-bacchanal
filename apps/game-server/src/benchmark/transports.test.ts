@@ -562,3 +562,91 @@ describe.each(TRANSPORTS)('%s transport', (kind) => {
     await host.disconnect();
   });
 });
+
+// Real two-phone LAN testing: the Host browser connected via raw WebSocket
+// while both phones stayed on Socket.IO, and all of them kept interacting
+// correctly with the same session — because both adapters feed the same
+// BenchmarkSession. Deliberately outside describe.each above: these tests
+// exist specifically to connect DIFFERENT transports to the SAME live server
+// at once, which describe.each's "one transport per iteration" shape cannot
+// express.
+describe('mixed-transport session', () => {
+  async function fetchState(): Promise<{
+    transports: { socketio: number; websocket: number; mixed: boolean };
+    clients: { benchmarkClientId: string; transport: string | null }[];
+  }> {
+    return (await (await fetch(`http://127.0.0.1:${port}/benchmark/state`)).json()) as never;
+  }
+
+  it('remains fully functional when Host and players use different transports', async () => {
+    const host = client('websocket', unique('mixHost'), true);
+    const player1 = client('socketio', unique('mixP1'));
+    const player2 = client('socketio', unique('mixP2'));
+
+    await host.connect();
+    await player1.connect();
+    await player2.connect();
+    await host.submit(BENCHMARK_INTENTS.RESUME, {}).catch(() => undefined);
+    await host.submit(BENCHMARK_INTENTS.RESET_BUZZER, {});
+
+    // The buzzer still works correctly end to end across the mix: opened by
+    // a WebSocket Host, locked to the first Socket.IO player to buzz.
+    await host.submit(BENCHMARK_INTENTS.OPEN_BUZZER, {});
+    const results = await Promise.all([
+      player1.submit(BENCHMARK_INTENTS.BUZZ, { clientSentAt: Date.now() }),
+      player2.submit(BENCHMARK_INTENTS.BUZZ, { clientSentAt: Date.now() }),
+    ]);
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+
+    await host.submit(BENCHMARK_INTENTS.RESET_BUZZER, {});
+    await Promise.all([host.disconnect(), player1.disconnect(), player2.disconnect()]);
+  });
+
+  it('reports the session as mixed with correct per-transport counts', async () => {
+    const host = client('websocket', unique('mixCountHost'), true);
+    const player1 = client('socketio', unique('mixCountP1'));
+    const player2 = client('socketio', unique('mixCountP2'));
+
+    await host.connect();
+    await player1.connect();
+    await player2.connect();
+    await new Promise((r) => setTimeout(r, 100));
+
+    const state = await fetchState();
+    expect(state.transports.mixed).toBe(true);
+    expect(state.transports.websocket).toBeGreaterThanOrEqual(1);
+    expect(state.transports.socketio).toBeGreaterThanOrEqual(2);
+
+    const hostEntry = state.clients.find((c) => c.benchmarkClientId === host.benchmarkClientId);
+    const p1Entry = state.clients.find((c) => c.benchmarkClientId === player1.benchmarkClientId);
+    expect(hostEntry?.transport).toBe('websocket');
+    expect(p1Entry?.transport).toBe('socketio');
+
+    await Promise.all([host.disconnect(), player1.disconnect(), player2.disconnect()]);
+  });
+
+  it('reports not mixed once a transport-pure session is restored', async () => {
+    const host = client('socketio', unique('mixPureHost'), true);
+    const mismatched = client('websocket', unique('mixPurePlayer'));
+
+    await host.connect();
+    await mismatched.connect();
+    await new Promise((r) => setTimeout(r, 100));
+    expect((await fetchState()).transports.mixed).toBe(true);
+
+    // The mismatched client leaves; the session returns to being pure.
+    await mismatched.disconnect();
+    await new Promise((r) => setTimeout(r, 150));
+
+    // The disconnect of an active player auto-pauses (see the disconnect
+    // suite above) — resume before asserting purity so this test's own
+    // cleanup does not leave the shared session paused for later tests.
+    await host.submit(BENCHMARK_INTENTS.RESUME, {}).catch(() => undefined);
+
+    const state = await fetchState();
+    expect(state.transports.mixed).toBe(false);
+    expect(state.transports.websocket).toBe(0);
+
+    await host.disconnect();
+  });
+});

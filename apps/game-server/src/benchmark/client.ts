@@ -85,9 +85,22 @@ export class SocketIOBenchmarkClient implements BenchmarkClient {
   }
 
   disconnect(): Promise<void> {
-    this.#socket?.disconnect();
-    this.#socket = null;
-    return Promise.resolve();
+    return new Promise((resolve) => {
+      const socket = this.#socket;
+      if (socket === null) {
+        resolve();
+        return;
+      }
+      // Wait for the client-side socket to actually close, matching the
+      // WebSocket client below. socket.disconnect() alone resolves this
+      // promise before the local socket has finished tearing down, which
+      // left a real race in tests that disconnect a client and immediately
+      // check the SERVER's view of who is connected — the local socket
+      // reported gone well before the server had processed anything.
+      socket.once('disconnect', () => resolve());
+      socket.disconnect();
+      this.#socket = null;
+    });
   }
 
   submit(type: string, payload: unknown, intentId?: string): Promise<IntentAck> {

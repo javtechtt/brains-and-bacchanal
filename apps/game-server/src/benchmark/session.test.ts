@@ -38,8 +38,12 @@ function intent(type: string, payload: unknown = {}, intentId?: string): IntentE
   };
 }
 
-function hello(conn: string, id: string, isHost = false) {
-  return session.handle(conn, intent(BENCHMARK_INTENTS.HELLO, { benchmarkClientId: id, isHost }));
+function hello(conn: string, id: string, isHost = false, transportKind?: 'socketio' | 'websocket') {
+  return session.handle(
+    conn,
+    intent(BENCHMARK_INTENTS.HELLO, { benchmarkClientId: id, isHost }),
+    transportKind,
+  );
 }
 
 function setupHostAndPlayers(count = 2) {
@@ -589,5 +593,112 @@ describe('active-player disconnect auto-pauses', () => {
     expect(clientId).toBeNull();
     expect(events).toHaveLength(0);
     expect(session.paused).toBe(false);
+  });
+});
+
+// Real two-phone LAN testing showed the Host browser and the phones can each
+// independently choose Socket.IO or raw WebSocket while still interacting
+// correctly through the shared session — a genuine property of the
+// architecture, but easy to mistake for a valid transport comparison. These
+// tests cover tracking and exposing that mix, without changing whether it
+// works (requirement 5: mixed sessions remain functional).
+describe('per-client transport tracking', () => {
+  it('records the transport a client connected with', () => {
+    hello(HOST_CONN, 'host-1', true, 'websocket');
+    hello(P1, 'player-1', false, 'socketio');
+
+    const snap = session.snapshot();
+    const host = snap.clients.find((c) => c.benchmarkClientId === 'host-1');
+    const player = snap.clients.find((c) => c.benchmarkClientId === 'player-1');
+
+    expect(host?.transport).toBe('websocket');
+    expect(player?.transport).toBe('socketio');
+  });
+
+  it('leaves transport null for a client that never reported one', () => {
+    // Mirrors how the deterministic session.test.ts helpers are used
+    // elsewhere in this file: handle() called without a transportKind, as
+    // every other test in this file already does.
+    hello(HOST_CONN, 'host-1', true);
+    const snap = session.snapshot();
+    expect(snap.clients[0]?.transport).toBeNull();
+  });
+
+  it('reports a pure socketio session correctly', () => {
+    hello(HOST_CONN, 'host-1', true, 'socketio');
+    hello(P1, 'player-1', false, 'socketio');
+    hello(P2, 'player-2', false, 'socketio');
+
+    const summary = session.transportSummary();
+    expect(summary).toEqual({ socketio: 3, websocket: 0, mixed: false });
+  });
+
+  it('reports a pure websocket session correctly', () => {
+    hello(HOST_CONN, 'host-1', true, 'websocket');
+    hello(P1, 'player-1', false, 'websocket');
+
+    const summary = session.transportSummary();
+    expect(summary).toEqual({ socketio: 0, websocket: 2, mixed: false });
+  });
+
+  it('detects a mixed session — the scenario found during real LAN testing', () => {
+    // Host on raw WebSocket, phones on Socket.IO — exactly what was observed.
+    hello(HOST_CONN, 'host-1', true, 'websocket');
+    hello(P1, 'player-1', false, 'socketio');
+    hello(P2, 'player-2', false, 'socketio');
+
+    const summary = session.transportSummary();
+    expect(summary.mixed).toBe(true);
+    expect(summary).toEqual({ socketio: 2, websocket: 1, mixed: true });
+  });
+
+  it('exposes the same summary from the snapshot', () => {
+    hello(HOST_CONN, 'host-1', true, 'websocket');
+    hello(P1, 'player-1', false, 'socketio');
+
+    expect(session.snapshot().transports).toEqual(session.transportSummary());
+  });
+
+  it('excludes disconnected clients from the transport summary', () => {
+    hello(HOST_CONN, 'host-1', true, 'websocket');
+    hello(P1, 'player-1', false, 'socketio');
+    expect(session.transportSummary().mixed).toBe(true);
+
+    // The player leaves. A disconnected identity's last-known transport must
+    // not keep an otherwise transport-pure LIVE session reading as mixed.
+    session.onDisconnect(P1);
+    session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.RESUME));
+
+    expect(session.transportSummary()).toEqual({ socketio: 0, websocket: 1, mixed: false });
+  });
+
+  it('remains functional across a mixed session (requirement 5)', () => {
+    hello(HOST_CONN, 'host-1', true, 'websocket');
+    hello(P1, 'player-1', false, 'socketio');
+    expect(session.transportSummary().mixed).toBe(true);
+
+    // The buzzer, pause and Host-authority rules are all still enforced
+    // normally — mixing transports changes nothing about the rules.
+    const opened = session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.OPEN_BUZZER));
+    expect(opened.ack.ok).toBe(true);
+
+    const buzzed = session.handle(P1, intent(BENCHMARK_INTENTS.BUZZ));
+    expect(buzzed.ack.ok).toBe(true);
+    expect(session.acceptedBuzz?.benchmarkClientId).toBe('player-1');
+  });
+
+  it('updates the recorded transport when an identity reconnects on a different one', () => {
+    // A reconnect legitimately arriving on a different transport than before
+    // (e.g. the browser page was reloaded with the other radio button
+    // selected) is allowed and simply updates the recorded value — it is not
+    // an error and does not create a duplicate client.
+    hello(P1, 'player-1', false, 'socketio');
+    expect(session.snapshot().clients[0]?.transport).toBe('socketio');
+
+    session.onDisconnect(P1);
+    hello('conn-p1-new', 'player-1', false, 'websocket');
+
+    expect(session.clientCount()).toBe(1);
+    expect(session.snapshot().clients[0]?.transport).toBe('websocket');
   });
 });

@@ -1,6 +1,6 @@
 import { writeFileSync } from 'node:fs';
 import type { TransportKind } from '@bb/protocol';
-import { runBenchmark, type BenchmarkReport } from './runner.js';
+import { runBenchmark, MixedTransportError, type BenchmarkReport } from './runner.js';
 
 /**
  * Benchmark CLI — DEVELOPMENT ONLY.
@@ -8,6 +8,14 @@ import { runBenchmark, type BenchmarkReport } from './runner.js';
  *   pnpm benchmark --transport socketio
  *   pnpm benchmark --transport websocket
  *   pnpm benchmark --transport both --clients 3 --pings 50 --buzz-trials 6
+ *
+ * By default, a run refuses to proceed as "official" if the live session
+ * already has a client connected via the OTHER transport (a Host browser or
+ * phone left over from manual testing, for instance) — both adapters share
+ * one session, so that would silently contaminate a Socket.IO-vs-WebSocket
+ * comparison with the other transport's traffic. Pass --allow-mixed to run
+ * anyway as an explicit interoperability test; the report is then marked
+ * official.overridden and must not be quoted as a comparison result.
  *
  * Requires the benchmark server to be running (`pnpm benchmark:server`).
  */
@@ -23,6 +31,10 @@ function num(name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function flag(name: string): boolean {
+  return process.argv.includes(`--${name}`);
+}
+
 const requested = arg('transport', 'both');
 const transports: TransportKind[] =
   requested === 'both' ? ['socketio', 'websocket'] : [requested as TransportKind];
@@ -33,6 +45,7 @@ const options = {
   clients: num('clients', 3),
   pings: num('pings', 30),
   buzzTrials: num('buzz-trials', 6),
+  allowMixed: flag('allow-mixed'),
 };
 
 function printReport(report: BenchmarkReport): void {
@@ -42,6 +55,15 @@ function printReport(report: BenchmarkReport): void {
 
   console.log('');
   console.log(`=== ${report.transport.toUpperCase()} ===`);
+  console.log('');
+  console.log('  Official comparison status');
+  line('transport-pure at measurement time', report.official.pure);
+  line('other-transport clients present', `socketio=${report.official.summary.socketio} websocket=${report.official.summary.websocket}`);
+  if (report.official.overridden) {
+    console.log('  ⚠ MIXED TRANSPORT SESSION — run allowed via --allow-mixed.');
+    console.log('    This is an interoperability result, NOT an official transport comparison.');
+  }
+
   console.log('');
   console.log('  RTT (client clock, one clock only)');
   line('samples', report.rtt.count);
@@ -110,9 +132,18 @@ async function main(): Promise<void> {
 
   for (const transport of transports) {
     console.log(`\nRunning ${transport} against ${options.host}:${options.port} ...`);
-    const report = await runBenchmark({ ...options, transport });
-    reports.push(report);
-    printReport(report);
+    try {
+      const report = await runBenchmark({ ...options, transport });
+      reports.push(report);
+      printReport(report);
+    } catch (err) {
+      if (err instanceof MixedTransportError) {
+        console.error(`\n✗ ${err.message}\n`);
+        process.exitCode = 1;
+        continue;
+      }
+      throw err;
+    }
   }
 
   const out = arg('out', '');

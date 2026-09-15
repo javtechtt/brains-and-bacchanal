@@ -28,7 +28,14 @@ interface SnapshotState {
   buzzerRound: number;
   acceptedBuzz: { benchmarkClientId: string; elapsedSinceOpenMs: number } | null;
   timer: { active: boolean; durationMs: number; remainingMs: number; paused: boolean };
-  clients: { benchmarkClientId: string; connected: boolean; isHost: boolean; label: string }[];
+  transports: { socketio: number; websocket: number; mixed: boolean };
+  clients: {
+    benchmarkClientId: string;
+    connected: boolean;
+    isHost: boolean;
+    label: string;
+    transport: 'socketio' | 'websocket' | null;
+  }[];
 }
 
 export default function BenchmarkHostPage() {
@@ -187,10 +194,63 @@ export default function BenchmarkHostPage() {
 
       <section style={card}>
         <h2 style={h2}>Benchmark clients ({snapshot?.clients.length ?? 0})</h2>
+
+        {snapshot?.transports.mixed === true && (
+          <div
+            style={{
+              background: '#5a3a10',
+              border: '1px solid #d99a2b',
+              borderRadius: 5,
+              padding: '8px 10px',
+              marginBottom: 10,
+              fontSize: 13,
+              fontWeight: 700,
+              color: '#f5d38a',
+            }}
+          >
+            ⚠ MIXED TRANSPORT SESSION — connected clients are split across
+            Socket.IO and raw WebSocket. The session keeps working, but any
+            measurement taken right now is NOT a valid transport comparison.
+            The official CLI benchmark refuses to run against this session
+            unless you pass --allow-mixed.
+          </div>
+        )}
+
+        {snapshot !== null && (
+          <p style={{ ...muted, marginTop: 0, marginBottom: 10 }}>
+            Socket.IO connections: {snapshot.transports.socketio} &nbsp;·&nbsp;
+            WebSocket connections: {snapshot.transports.websocket}
+          </p>
+        )}
+
         {(snapshot?.clients ?? []).map((client) => (
-          <div key={client.benchmarkClientId} style={{ fontSize: 13, padding: '2px 0' }}>
-            <span style={{ color: client.connected ? '#5ec27e' : '#d1495b' }}>●</span>{' '}
-            {client.label} {client.isHost && '(host)'}{' '}
+          <div
+            key={client.benchmarkClientId}
+            style={{
+              fontSize: 13,
+              padding: '3px 0',
+              display: 'grid',
+              gridTemplateColumns: '14px 1fr 70px 90px auto',
+              gap: 8,
+              alignItems: 'center',
+            }}
+          >
+            <span style={{ color: client.connected ? '#5ec27e' : '#d1495b' }}>●</span>
+            <span>{client.label}</span>
+            <span style={muted}>{client.isHost ? 'HOST' : 'PLAYER'}</span>
+            <span
+              style={{
+                fontWeight: 600,
+                color:
+                  client.transport === null
+                    ? '#6a6a76'
+                    : client.transport === 'socketio'
+                      ? '#6d9eeb'
+                      : '#e0a15c',
+              }}
+            >
+              {client.transport ?? '—'}
+            </span>
             <span style={muted}>{client.benchmarkClientId}</span>
           </div>
         ))}

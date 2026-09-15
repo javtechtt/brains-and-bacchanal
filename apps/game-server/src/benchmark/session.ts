@@ -15,6 +15,8 @@ import {
   type IntentAck,
   type IntentEnvelope,
   type SequenceNumber,
+  type TransportKind,
+  type BenchmarkTransportSummary,
 } from '@bb/protocol';
 import {
   FakeClock,
@@ -59,6 +61,16 @@ interface BenchmarkClient {
   isHost: boolean;
   label: string;
   connected: boolean;
+  /**
+   * Which transport this client is currently connected through.
+   *
+   * Recorded at HELLO time from what the caller (server.ts) reports for the
+   * connectionId that sent it — see the `transportKind` parameter threaded
+   * through `handle`/`onDisconnect` below. Kept from the client's LAST
+   * connection while disconnected, so a reconnect test can still show which
+   * transport the identity was last seen on.
+   */
+  transport: TransportKind | null;
 }
 
 export interface AcceptedBuzz extends BenchmarkBuzzAcceptedPayload {
@@ -170,10 +182,18 @@ export class BenchmarkSession {
    *
    * Returns the acknowledgement plus any events to publish. The caller owns
    * delivery, so this stays transport-free and directly unit-testable.
+   *
+   * `transportKind` is optional and used only by HELLO, to record which
+   * transport this connection is using (see BenchmarkClient.transport). It
+   * comes from the caller (server.ts), which already knows which
+   * RealtimeTransport adapter is invoking it — nothing here inspects the
+   * connection to guess it, and the deterministic unit tests can omit it
+   * entirely since they never exercise the multi-transport display.
    */
   handle(
     connectionId: ConnectionId,
     intent: IntentEnvelope,
+    transportKind?: TransportKind,
   ): { ack: IntentAck; events: EventEnvelope[] } {
     if (!isSupportedProtocolVersion(intent.protocolVersion)) {
       return this.#reject(
@@ -198,7 +218,7 @@ export class BenchmarkSession {
       );
     }
 
-    const outcome = this.#evaluate(connectionId, intent);
+    const outcome = this.#evaluate(connectionId, intent, transportKind);
 
     if (outcome.ack.ok) {
       this.#seenIntents.set(intent.intentId, outcome.ack.seq);
@@ -209,10 +229,11 @@ export class BenchmarkSession {
   #evaluate(
     connectionId: ConnectionId,
     intent: IntentEnvelope,
+    transportKind?: TransportKind,
   ): { ack: IntentAck; events: EventEnvelope[] } {
     switch (intent.type) {
       case BENCHMARK_INTENTS.HELLO:
-        return this.#hello(connectionId, intent);
+        return this.#hello(connectionId, intent, transportKind);
       case BENCHMARK_INTENTS.PING:
         return this.#ping();
       case BENCHMARK_INTENTS.BUZZ:
@@ -245,6 +266,7 @@ export class BenchmarkSession {
   #hello(
     connectionId: ConnectionId,
     intent: IntentEnvelope,
+    transportKind?: TransportKind,
   ): { ack: IntentAck; events: EventEnvelope[] } {
     const payload = intent.payload as Record<string, unknown>;
     const benchmarkClientId = payload['benchmarkClientId'];
@@ -254,15 +276,22 @@ export class BenchmarkSession {
 
     const isHost = payload['isHost'] === true;
     const label = typeof payload['label'] === 'string' ? payload['label'] : benchmarkClientId;
+    // Undefined only in tests that call handle() directly without a
+    // transport; real connections always come through server.ts, which
+    // always knows which adapter invoked it.
+    const transport = transportKind ?? null;
 
     // Reclaiming an existing identity is the reconnect path: same client id,
-    // new connection, no duplicate client created.
+    // new connection, no duplicate client created. A reconnect may arrive on
+    // a DIFFERENT transport than last time — that is allowed (requirement 5:
+    // mixed sessions remain functional) and simply updates the recorded value.
     const existing = this.#clients.get(benchmarkClientId);
     if (existing !== undefined) {
       existing.connectionId = connectionId;
       existing.connected = true;
       existing.isHost = isHost;
       existing.label = label;
+      existing.transport = transport;
     } else {
       this.#clients.set(benchmarkClientId, {
         benchmarkClientId,
@@ -270,6 +299,7 @@ export class BenchmarkSession {
         isHost,
         label,
         connected: true,
+        transport,
       });
     }
 
@@ -590,7 +620,6 @@ export class BenchmarkSession {
 
     return {
       protocolVersion: PROTOCOL_VERSION,
-      transport: 'n/a',
       seq: this.#seq,
       serverTime: this.#clock.now(),
       phase: this.#paused ? 'PAUSED' : 'ACTIVE_PLAY',
@@ -601,13 +630,34 @@ export class BenchmarkSession {
       buzzerRound: this.#buzzerRound,
       acceptedBuzz: this.#acceptedBuzz,
       timer: timerState,
+      transports: this.transportSummary(),
       clients: [...this.#clients.values()].map((c) => ({
         benchmarkClientId: c.benchmarkClientId,
         connected: c.connected,
         isHost: c.isHost,
         label: c.label,
+        transport: c.transport,
       })),
     };
+  }
+
+  /**
+   * Transport mix among currently CONNECTED clients.
+   *
+   * Only connected clients count: a disconnected identity's last-known
+   * transport should not make an otherwise transport-pure live session read
+   * as mixed. `mixed` is what the Host UI's "MIXED TRANSPORT SESSION" banner
+   * and the CLI runner's official-run check both key off.
+   */
+  transportSummary(): BenchmarkTransportSummary {
+    let socketio = 0;
+    let websocket = 0;
+    for (const c of this.#clients.values()) {
+      if (!c.connected) continue;
+      if (c.transport === 'socketio') socketio += 1;
+      else if (c.transport === 'websocket') websocket += 1;
+    }
+    return { socketio, websocket, mixed: socketio > 0 && websocket > 0 };
   }
 
   get rejectedBuzzes(): number {

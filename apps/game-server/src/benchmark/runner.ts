@@ -18,6 +18,28 @@ export interface RunnerOptions {
   readonly clients: number;
   readonly pings: number;
   readonly buzzTrials: number;
+  /**
+   * Allow this run to proceed, and to be reported as "official", even if
+   * OTHER clients connected to the same live session (a Host browser, a
+   * phone) are using a different transport at the moment of measurement.
+   *
+   * Both adapters feed one BenchmarkSession, so a mixed session is fully
+   * functional — that is by design. But a run measured while the session is
+   * mixed is not a valid Socket.IO-vs-WebSocket comparison: some of the
+   * events and buzzer contention the runner's own clients see may have been
+   * produced by a client on the other transport. Default false, so an
+   * accidental mixed sample cannot silently become "the" result for a
+   * transport.
+   */
+  readonly allowMixed: boolean;
+}
+
+/** Whether the run's official-purity check passed, and why if not. */
+export interface TransportPurity {
+  readonly pure: boolean;
+  readonly summary: { readonly socketio: number; readonly websocket: number; readonly mixed: boolean };
+  /** Non-null when the run proceeded anyway because allowMixed was set. */
+  readonly overridden: boolean;
 }
 
 export interface BuzzTrialResult {
@@ -33,6 +55,13 @@ export interface BenchmarkReport {
   readonly transport: TransportKind;
   readonly startedAt: string;
   readonly clients: number;
+  /**
+   * Whether the session was transport-pure for `transport` at measurement
+   * time. A report with `official.pure === false` (whether or not the run was
+   * allowed to proceed via allowMixed) must not be treated as a valid
+   * Socket.IO-vs-WebSocket comparison point — see docs/NETWORK_BENCHMARK.md.
+   */
+  readonly official: TransportPurity;
   readonly rtt: RttSummary;
   readonly clockOffsetMs: { readonly medianMs: number; readonly maxAbsMs: number };
   readonly buzz: {
@@ -76,6 +105,28 @@ export interface BenchmarkReport {
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Thrown when an official run (`allowMixed: false`, the default) finds the
+ * live session already mixed with a different transport at measurement time —
+ * requirement 7/8: "require all participating benchmark Host/player clients
+ * to use [transport]."
+ */
+export class MixedTransportError extends Error {
+  constructor(
+    public readonly requestedTransport: TransportKind,
+    public readonly summary: { socketio: number; websocket: number; mixed: boolean },
+  ) {
+    super(
+      `Refusing an official ${requestedTransport} run: the live benchmark session ` +
+        `also has ${requestedTransport === 'socketio' ? summary.websocket : summary.socketio} ` +
+        `client(s) connected via the other transport (socketio=${summary.socketio}, ` +
+        `websocket=${summary.websocket}). Disconnect them, or pass --allow-mixed to run ` +
+        `this as an explicit interoperability test instead of an official comparison.`,
+    );
+    this.name = 'MixedTransportError';
+  }
+}
+
 export async function runBenchmark(options: RunnerOptions): Promise<BenchmarkReport> {
   const errors: string[] = [];
   const startedAt = new Date().toISOString();
@@ -104,6 +155,31 @@ export async function runBenchmark(options: RunnerOptions): Promise<BenchmarkRep
 
   const probe = players[0];
   if (probe === undefined) throw new Error('benchmark requires at least one client');
+
+  // -------------------------------------------------------------------------
+  // Transport purity — requirements 6-8: an official run for `transport`
+  // requires every currently connected benchmark client (Host and players,
+  // including any real browser/phone left over from manual testing — not
+  // only this run's own synthetic clients) to be on that same transport.
+  //
+  // Checked here, AFTER this run's own Host/players have connected, so the
+  // session reflects who is actually present for the measurement about to
+  // happen — including this run's own clients, who obviously do match
+  // `transport` by construction, and anyone else's, who may not.
+  // -------------------------------------------------------------------------
+  const stateBeforeMeasuring = await fetchState(options);
+  const summary = stateBeforeMeasuring?.transports ?? { socketio: 0, websocket: 0, mixed: false };
+  const otherTransportCount =
+    options.transport === 'socketio' ? summary.websocket : summary.socketio;
+  const pure = otherTransportCount === 0;
+
+  if (!pure && !options.allowMixed) {
+    for (const client of players) await client.disconnect();
+    await host.disconnect();
+    throw new MixedTransportError(options.transport, summary);
+  }
+
+  const official: TransportPurity = { pure, summary, overridden: !pure && options.allowMixed };
 
   // -------------------------------------------------------------------------
   // RTT and clock offset
@@ -290,6 +366,7 @@ export async function runBenchmark(options: RunnerOptions): Promise<BenchmarkRep
     transport: options.transport,
     startedAt,
     clients: options.clients,
+    official,
     rtt: summarizeRtt(rttSamples),
     clockOffsetMs: {
       medianMs: round2(offsets.length === 0 ? 0 : offsets[Math.floor(offsets.length / 2)] ?? 0),
@@ -341,6 +418,7 @@ interface BenchmarkStateResponse {
   paused: boolean;
   timer: { remainingMs: number };
   clients: { benchmarkClientId: string; connected: boolean }[];
+  transports: { socketio: number; websocket: number; mixed: boolean };
 }
 
 async function fetchState(options: RunnerOptions): Promise<BenchmarkStateResponse | null> {

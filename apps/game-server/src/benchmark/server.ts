@@ -87,7 +87,9 @@ export function createBenchmarkServer(logger: Logger, clock: Clock = new SystemC
     });
 
     transport.onIntent((connectionId, intent) => {
-      const { ack, events } = session.handle(connectionId, intent);
+      // Recording which adapter produced this intent is what lets the session
+      // and Host panel show per-client transport and detect a mixed session.
+      const { ack, events } = session.handle(connectionId, intent, transport.kind);
       // Events broadcast on the transport that produced them. A real game would
       // fan out across both; for measurement, keeping them separate avoids one
       // transport's load skewing the other's numbers.

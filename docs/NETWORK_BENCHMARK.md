@@ -147,7 +147,7 @@ pnpm benchmark --transport both --out results.json
 ```
 
 Options: `--transport` (`socketio` | `websocket` | `both`), `--host`, `--port`,
-`--clients`, `--pings`, `--buzz-trials`, `--out`.
+`--clients`, `--pings`, `--buzz-trials`, `--out`, `--allow-mixed`.
 
 Both transports run the **same scenario code**, parameterised by transport.
 
@@ -159,6 +159,49 @@ pnpm dev
 
 - Host panel: `http://localhost:3000/benchmark/host`
 - Player page: `http://localhost:3000/benchmark/player`
+
+### Mixed-transport sessions
+
+Because both adapters feed one shared `BenchmarkSession`, the Host browser and
+each phone can each independently choose Socket.IO or raw WebSocket and still
+interact correctly — this was discovered during real two-phone LAN testing and
+is an intentional property of the architecture, not a bug. **It also means a
+mixed session is easy to mistake for a valid transport comparison.**
+
+The Host panel always shows, per connected client, which transport it is
+using, plus a running count:
+
+```text
+browser-host    HOST      websocket
+phone-xxxx      PLAYER    socketio
+phone-yyyy      PLAYER    socketio
+
+Socket.IO connections: 2   ·   WebSocket connections: 1
+```
+
+If the connected clients are not all on the same transport, the panel shows a
+**MIXED TRANSPORT SESSION** warning. The session keeps working — nobody is
+disconnected — but the warning is your signal that measurements taken right
+now are not comparable to a transport-pure run.
+
+The **synthetic CLI runner enforces this automatically**. Before measuring
+anything, it checks whether the live session already has a client connected on
+the *other* transport (a Host browser or phone left over from manual testing,
+for example) and refuses to run:
+
+```text
+$ pnpm benchmark --transport socketio
+✗ Refusing an official socketio run: the live benchmark session also has 1
+  client(s) connected via the other transport (socketio=2, websocket=1).
+  Disconnect them, or pass --allow-mixed to run this as an explicit
+  interoperability test instead of an official comparison.
+```
+
+To run anyway — for example, to specifically test that a mixed session behaves
+correctly, per the requirement that mixed-transport testing remain available —
+pass `--allow-mixed`. The resulting report is marked
+`official.overridden: true` and must not be quoted as a Socket.IO-vs-WebSocket
+comparison result; only a report with `official.pure: true` may be.
 
 ---
 

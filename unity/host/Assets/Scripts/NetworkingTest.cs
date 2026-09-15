@@ -48,6 +48,19 @@ namespace BrainsAndBacchanal
         private int _reconnectCount;
         private Vector2 _scroll;
 
+        /// <summary>
+        /// Unscaled time when <see cref="_snapshot"/> arrived.
+        ///
+        /// Used ONLY to interpolate the displayed countdown between snapshots —
+        /// see DisplayedRemainingMs. Unscaled so a paused/!focused Editor or a
+        /// changed Time.timeScale cannot distort the display.
+        /// </summary>
+        private float _snapshotReceivedAt = -1f;
+
+        /// <summary>Seconds between authoritative state refreshes while connected.</summary>
+        private const float StateRefreshSeconds = 0.5f;
+        private float _nextStateRefreshAt;
+
         private const string RoomId = "benchmark";
         private const int MaxRecentEvents = 12;
 
@@ -103,6 +116,53 @@ namespace BrainsAndBacchanal
             // Drain on the main thread: the receive loop runs off-thread and must
             // not touch Unity APIs itself.
             foreach (var frame in _client.DrainInbound()) HandleEventFrame(frame);
+
+            // Refresh authoritative state on a timer.
+            //
+            // Without this the panel only updated when an EVENT happened, so a
+            // running countdown sat frozen at whatever the last snapshot said —
+            // exactly what real-device testing found. The server does not push
+            // a per-second tick (it has no reason to), so a client that wants a
+            // live countdown has to ask. The browser pages already poll every
+            // 400-500ms; this is Unity's equivalent.
+            if (_client.State == BenchmarkWebSocketClient.ConnectionState.Connected
+                && Time.unscaledTime >= _nextStateRefreshAt)
+            {
+                _nextStateRefreshAt = Time.unscaledTime + StateRefreshSeconds;
+                _ = RequestSnapshot(isBackgroundPoll: true);
+            }
+        }
+
+        /// <summary>
+        /// Remaining milliseconds to DISPLAY, smoothed between snapshots.
+        ///
+        /// ================== DISPLAY ONLY — NOT AUTHORITY ==================
+        ///
+        /// The server owns the timer. `_snapshot.timer.remainingMs` is the truth,
+        /// and it is re-read twice a second above. This method only fills the gap
+        /// BETWEEN those refreshes so the countdown ticks smoothly instead of
+        /// stepping every 500ms.
+        ///
+        /// Nothing here decides anything: expiry, deadline acceptance and buzzer
+        /// outcomes are all server-side facts (ARCHITECTURE.md §6, CLAUDE.md
+        /// "Unity should render server state"). Every refresh snaps the display
+        /// back to the server's value, so local drift cannot accumulate, and the
+        /// result is floored at 0 rather than being allowed to imply expiry the
+        /// server has not declared.
+        ///
+        /// A frozen (paused) timer is never interpolated — GAME_RULES_LOCKED.md
+        /// §20 requires paused time not to consume the remaining time, so the
+        /// display must hold still exactly as the server's value does.
+        /// ==================================================================
+        /// </summary>
+        private long DisplayedRemainingMs()
+        {
+            var timer = _snapshot?.timer;
+            if (timer == null) return 0;
+            if (timer.paused || !timer.active || _snapshotReceivedAt < 0f) return timer.remainingMs;
+
+            var elapsedMs = (long)((Time.unscaledTime - _snapshotReceivedAt) * 1000f);
+            return Math.Max(0, timer.remainingMs - elapsedMs);
         }
 
         private async void OnApplicationQuit()
@@ -167,10 +227,21 @@ namespace BrainsAndBacchanal
             Connect();
         }
 
-        private async System.Threading.Tasks.Task RequestSnapshot()
+        /// <summary>
+        /// Ask the server for current authoritative state.
+        /// </summary>
+        /// <param name="isBackgroundPoll">
+        /// True for the twice-a-second refresh that keeps the countdown live.
+        /// A background poll must not overwrite "Last acknowledgement" on
+        /// success, or it would erase the result of whatever button the operator
+        /// just pressed before they could read it. A FAILED poll still reports,
+        /// because a silently dead refresh loop is exactly the kind of thing
+        /// that should be visible.
+        /// </param>
+        private async System.Threading.Tasks.Task RequestSnapshot(bool isBackgroundPoll = false)
         {
             var ack = await _client.SubmitAsync(BenchmarkIntents.RequestSnapshot, "{}");
-            _lastAck = Describe(ack);
+            if (!isBackgroundPoll || !ack.ok) _lastAck = Describe(ack);
         }
 
         private async void SendTestIntent()
@@ -219,7 +290,13 @@ namespace BrainsAndBacchanal
                 return;
             }
 
-            Record($"#{envelope.seq} {envelope.type}");
+            // Snapshots are now requested twice a second to keep the countdown
+            // live, so logging them would bury every real event under polling
+            // noise. The state they carry is still applied below.
+            if (envelope.type != BenchmarkEvents.Snapshot)
+            {
+                Record($"#{envelope.seq} {envelope.type}");
+            }
 
             var payloadJson = WireFraming.ExtractEventPayload(frame);
             if (payloadJson == null) return;
@@ -231,14 +308,14 @@ namespace BrainsAndBacchanal
                 case BenchmarkEvents.ClientJoined:
                 {
                     var joined = SafeParse<BenchmarkClientJoinedPayload>(payloadJson);
-                    if (joined?.snapshot != null) _snapshot = joined.snapshot;
+                    if (joined?.snapshot != null) ApplySnapshot(joined.snapshot);
                     break;
                 }
 
                 case BenchmarkEvents.Snapshot:
                 {
                     var snap = SafeParse<BenchmarkSnapshot>(payloadJson);
-                    if (snap != null) _snapshot = snap;
+                    if (snap != null) ApplySnapshot(snap);
                     break;
                 }
 
@@ -250,6 +327,20 @@ namespace BrainsAndBacchanal
                     _ = RequestSnapshot();
                     break;
             }
+        }
+
+        /// <summary>
+        /// Adopt a new authoritative snapshot.
+        ///
+        /// Stamping the arrival time here — in the ONE place snapshots are
+        /// accepted — is what lets the countdown interpolate correctly, and what
+        /// guarantees every refresh snaps the display back to the server's value
+        /// instead of drifting.
+        /// </summary>
+        private void ApplySnapshot(BenchmarkSnapshot snapshot)
+        {
+            _snapshot = snapshot;
+            _snapshotReceivedAt = Time.unscaledTime;
         }
 
         private static T SafeParse<T>(string json) where T : class
@@ -349,12 +440,18 @@ namespace BrainsAndBacchanal
 
             if (_snapshot.timer != null)
             {
+                // Interpolated between refreshes for a smooth countdown; the
+                // server's own value is shown underneath so the two can be
+                // compared at a glance during testing.
+                var displayedMs = DisplayedRemainingMs();
+
                 var timerText = _snapshot.timer.active
-                    ? $"{Mathf.CeilToInt(_snapshot.timer.remainingMs / 1000f)}s remaining"
+                    ? $"{Mathf.CeilToInt(displayedMs / 1000f)}s remaining"
                       + (_snapshot.timer.paused ? " (FROZEN)" : "")
                     : "inactive";
                 Row("Timer", timerText);
-                Row("Timer remaining (ms)", _snapshot.timer.remainingMs.ToString());
+                Row("Timer remaining (ms, displayed)", displayedMs.ToString());
+                Row("Timer remaining (ms, server)", _snapshot.timer.remainingMs.ToString());
             }
 
             Row("Buzzer", _snapshot.buzzerOpen ? $"OPEN (round {_snapshot.buzzerRound})" : "closed");

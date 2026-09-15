@@ -389,7 +389,41 @@ object should be, and returned null.
 Fixed with `FindValueStart`, which keeps scanning until a match is followed by
 `:` — the thing that actually distinguishes a field key from a string value.
 
-### 2. Unity main-thread deadlock
+### 2. Timer did not count down live (found on real devices)
+
+The countdown sat frozen in Unity and only jumped forward when something else
+caused a refresh. Every other value was correct, which is what made it easy to
+miss: the panel updated on **events**, and a running timer produces no events.
+The server has no reason to push a per-second tick, so a client wanting a live
+countdown has to ask. The browser pages already poll every 400-500ms; Unity had
+no equivalent.
+
+Fixed with two separate things, deliberately kept distinct:
+
+1. **Authoritative refresh** — `RequestSnapshot` every 500ms while connected,
+   matching the browser clients.
+2. **Display-only interpolation** — `DisplayedRemainingMs()` subtracts locally
+   elapsed unscaled time between refreshes so the countdown ticks smoothly
+   rather than stepping twice a second.
+
+**The interpolation decides nothing.** Every refresh snaps the display back to
+the server's value, so local drift cannot accumulate; the result is floored at 0
+rather than implying an expiry the server has not declared; and a *paused* timer
+is never interpolated at all, because `GAME_RULES_LOCKED.md` §20 requires paused
+time not to consume the remaining time. The panel shows both
+`Timer remaining (ms, displayed)` and `Timer remaining (ms, server)` so the two
+can be compared during testing.
+
+Two consequences of polling had to be handled at the same time:
+
+- `BENCHMARK_SNAPSHOT` is no longer written to the "recent events" list, or
+  polling noise would bury every real event.
+- A background poll no longer overwrites "Last acknowledgement" on success — it
+  would erase the result of whatever button the operator just pressed. A
+  **failed** poll still reports, because a silently dead refresh loop should be
+  visible.
+
+### 3. Unity main-thread deadlock
 
 The first headless run connected, printed nothing further and hung until killed.
 Blocking Unity's main thread while awaiting continuations that want to return to

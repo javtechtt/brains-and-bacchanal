@@ -437,3 +437,157 @@ describe('three clients', () => {
     expect(results.filter((r) => !r.ack.ok)).toHaveLength(2);
   });
 });
+
+// GAME_RULES_LOCKED.md §20 / DECISION_LOG.md D-011: "If an active player
+// disconnects: gameplay pauses automatically." Found missing during real
+// two-phone LAN testing — a phone screen locking dropped the Socket.IO
+// connection, reconnected cleanly with the same identity, but the session
+// never paused.
+describe('active-player disconnect auto-pauses', () => {
+  it('pauses when a connected active player disconnects', () => {
+    setupHostAndPlayers(1);
+    expect(session.paused).toBe(false);
+
+    const { events } = session.onDisconnect(P1);
+
+    expect(session.paused).toBe(true);
+    expect(session.snapshot().pauseReason).toBe('player_disconnect');
+    expect(session.snapshot().pausedByClientId).toBe('player-1');
+    expect(events.some((e) => e.type === 'BENCHMARK_CLIENT_LEFT')).toBe(true);
+    expect(events.some((e) => e.type === 'BENCHMARK_PAUSED')).toBe(true);
+  });
+
+  it('freezes a running timer at disconnect and preserves remaining time', () => {
+    setupHostAndPlayers(1);
+    session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.START_TIMER, { durationMs: 30_000 }));
+
+    clock.advance(7_000);
+    expect(session.snapshot().timer.remainingMs).toBe(23_000);
+
+    session.onDisconnect(P1);
+    expect(session.snapshot().timer.paused).toBe(true);
+
+    // Real wall-clock time passing while paused must not consume the timer —
+    // this is the same guarantee Phase 2's Deadline gives a Host-initiated
+    // pause, exercised here through the disconnect path instead.
+    clock.advance(60_000);
+    expect(session.snapshot().timer.remainingMs).toBe(23_000);
+  });
+
+  it('does not open/reopen or advance the buzzer because of a disconnect', () => {
+    setupHostAndPlayers(1);
+    session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.OPEN_BUZZER));
+
+    session.onDisconnect(P1);
+
+    // The buzzer's authoritative state must be exactly what it was: open,
+    // same round, no winner invented. A disconnect must not silently
+    // reopen/reset/advance it.
+    const snap = session.snapshot();
+    expect(snap.buzzerOpen).toBe(true);
+    expect(snap.buzzerRound).toBe(1);
+    expect(snap.acceptedBuzz).toBeNull();
+  });
+
+  it('restores the same identity on reconnect with the session still paused', () => {
+    setupHostAndPlayers(1);
+    session.onDisconnect(P1);
+    expect(session.paused).toBe(true);
+
+    const { events } = hello('conn-p1-new', 'player-1');
+    expect(session.clientCount()).toBe(2); // still host + one player, no duplicate
+    expect(session.connectedClientCount()).toBe(2);
+
+    // The critical assertion: reconnecting must NOT resume gameplay on its
+    // own. GAME_RULES_LOCKED.md §20 — "reconnecting does not automatically
+    // resume gameplay."
+    expect(session.paused).toBe(true);
+
+    const reconnectPayload = events[0]?.payload as { reconnected: boolean };
+    expect(reconnectPayload.reconnected).toBe(true);
+  });
+
+  it('lets only the Host resume after an active-player disconnect', () => {
+    setupHostAndPlayers(1);
+    session.onDisconnect(P1);
+    hello('conn-p1-new', 'player-1');
+
+    const byPlayer = session.handle('conn-p1-new', intent(BENCHMARK_INTENTS.RESUME));
+    expect(byPlayer.ack.ok).toBe(false);
+    if (!byPlayer.ack.ok) expect(byPlayer.ack.error.code).toBe('UNAUTHORIZED_ACTOR');
+    expect(session.paused).toBe(true);
+
+    const byHost = session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.RESUME));
+    expect(byHost.ack.ok).toBe(true);
+    expect(session.paused).toBe(false);
+  });
+
+  it('resumes the timer from approximately its remaining time after Host resume', () => {
+    setupHostAndPlayers(1);
+    session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.START_TIMER, { durationMs: 30_000 }));
+    clock.advance(10_000); // 20_000 remaining
+
+    session.onDisconnect(P1);
+    clock.advance(15_000); // time passes while disconnected/paused — must not count
+
+    session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.RESUME));
+    expect(session.snapshot().timer.remainingMs).toBe(20_000);
+
+    clock.advance(5_000);
+    expect(session.snapshot().timer.remainingMs).toBe(15_000);
+  });
+
+  it('does not nest a second pause when another active player disconnects while already paused', () => {
+    setupHostAndPlayers(2);
+    session.onDisconnect(P1);
+    expect(session.paused).toBe(true);
+    expect(session.snapshot().pausedByClientId).toBe('player-1');
+
+    const { events } = session.onDisconnect(P2);
+
+    // Still paused, exactly once — the original pause's return state (and the
+    // reason it was recorded under) must not be overwritten or corrupted.
+    expect(session.paused).toBe(true);
+    expect(session.snapshot().pauseReason).toBe('player_disconnect');
+    expect(session.snapshot().pausedByClientId).toBe('player-1'); // unchanged
+
+    // The second disconnect is still recorded normally.
+    expect(events.some((e) => e.type === 'BENCHMARK_CLIENT_LEFT')).toBe(true);
+    // But it must not have emitted a second PAUSED event.
+    expect(events.some((e) => e.type === 'BENCHMARK_PAUSED')).toBe(false);
+  });
+
+  it('does not auto-pause when the Host disconnects', () => {
+    // Explicitly no Host-disconnect rule is invented here. Logged via
+    // CLIENT_LEFT only.
+    setupHostAndPlayers(1);
+    const { events } = session.onDisconnect(HOST_CONN);
+
+    expect(session.paused).toBe(false);
+    expect(events.some((e) => e.type === 'BENCHMARK_CLIENT_LEFT')).toBe(true);
+    expect(events.some((e) => e.type === 'BENCHMARK_PAUSED')).toBe(false);
+  });
+
+  it('does not pause for a connectionId that was never identified', () => {
+    setupHostAndPlayers(1);
+    const { clientId, events } = session.onDisconnect('conn-never-said-hello');
+
+    expect(clientId).toBeNull();
+    expect(events).toHaveLength(0);
+    expect(session.paused).toBe(false);
+  });
+
+  it('does not pause again for a client that already disconnected', () => {
+    setupHostAndPlayers(1);
+    session.onDisconnect(P1);
+    session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.RESUME));
+    expect(session.paused).toBe(false);
+
+    // Disconnecting the SAME (already-gone) connectionId a second time must be
+    // a no-op: there is no connection to look up any more.
+    const { clientId, events } = session.onDisconnect(P1);
+    expect(clientId).toBeNull();
+    expect(events).toHaveLength(0);
+    expect(session.paused).toBe(false);
+  });
+});

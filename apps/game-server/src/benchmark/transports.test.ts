@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import pino from 'pino';
 import { BENCHMARK_INTENTS, type TransportKind } from '@bb/protocol';
 import { createBenchmarkServer, type BenchmarkServer } from './server.js';
@@ -46,6 +46,30 @@ function client(kind: TransportKind, id: string, isHost = false): BenchmarkClien
 const unique = (prefix: string): string => `${prefix}-${Math.random().toString(36).slice(2, 8)}`;
 
 describe.each(TRANSPORTS)('%s transport', (kind) => {
+  // The whole file shares ONE BenchmarkSession and ONE server, across every
+  // test and across both transport iterations — deliberately, so the session
+  // is exercised the way a real long-running benchmark run is. That means a
+  // test which disconnects a player client (and every reconnect/auto-pause
+  // test now does, by design: that disconnect is exactly what should
+  // auto-pause the session) leaves the session paused for whatever runs next
+  // unless something resumes it first.
+  //
+  // Rather than scatter a defensive RESUME through every existing test, reset
+  // to a known baseline here: resume if paused, close the buzzer if open. Both
+  // are no-ops (rejected, harmlessly) when already in that state.
+  let cleanupHost: BenchmarkClient;
+
+  beforeEach(async () => {
+    cleanupHost = client(kind, unique('cleanup'), true);
+    await cleanupHost.connect();
+    await cleanupHost.submit(BENCHMARK_INTENTS.RESUME, {}).catch(() => undefined);
+    await cleanupHost.submit(BENCHMARK_INTENTS.RESET_BUZZER, {}).catch(() => undefined);
+  });
+
+  afterEach(async () => {
+    await cleanupHost.disconnect();
+  });
+
   it('connects and identifies a client', async () => {
     const c = client(kind, unique('solo'));
     await c.connect();
@@ -326,6 +350,175 @@ describe.each(TRANSPORTS)('%s transport', (kind) => {
     expect(matching[0]?.connected).toBe(true);
 
     await again.disconnect();
+  });
+
+  // GAME_RULES_LOCKED.md §20 / DECISION_LOG.md D-011, verified over a real
+  // socket for both transports. Found missing during real two-phone LAN
+  // testing: a phone's screen locking dropped the connection and the session
+  // never paused. Both adapters go through the SAME server.ts wiring onto
+  // BenchmarkSession#onDisconnect, so a bug here would show identically on
+  // both — this test proves that by literally running unmodified against
+  // whichever transport `kind` is for this describe.each iteration.
+  async function fetchState(): Promise<{
+    paused: boolean;
+    pauseReason: string | null;
+    pausedByClientId: string | null;
+    buzzerOpen: boolean;
+    buzzerRound: number;
+    timer: { active: boolean; paused: boolean; remainingMs: number };
+    clients: { benchmarkClientId: string; connected: boolean }[];
+  }> {
+    return (await (await fetch(`http://127.0.0.1:${port}/benchmark/state`)).json()) as never;
+  }
+
+  it('auto-pauses when a real active-player socket disconnects', async () => {
+    const host = client(kind, unique('apHost'), true);
+    const player = client(kind, unique('apPlayer'));
+    await host.connect();
+    await player.connect();
+    // Known starting point: not paused. The session is shared across the
+    // whole file and across both transport iterations.
+    await host.submit(BENCHMARK_INTENTS.RESUME, {}).catch(() => undefined);
+
+    await player.disconnect();
+    await new Promise((r) => setTimeout(r, 150));
+
+    const state = await fetchState();
+    expect(state.paused).toBe(true);
+    expect(state.pauseReason).toBe('player_disconnect');
+
+    await host.submit(BENCHMARK_INTENTS.RESUME, {});
+    await host.disconnect();
+  });
+
+  it('freezes a running timer when the active player disconnects, over a real socket', async () => {
+    const host = client(kind, unique('apTimerHost'), true);
+    const player = client(kind, unique('apTimerPlayer'));
+    await host.connect();
+    await player.connect();
+    await host.submit(BENCHMARK_INTENTS.RESUME, {}).catch(() => undefined);
+
+    await host.submit(BENCHMARK_INTENTS.START_TIMER, { durationMs: 30_000 });
+    await new Promise((r) => setTimeout(r, 300));
+
+    const before = await fetchState();
+    expect(before.timer.active).toBe(true);
+
+    await player.disconnect();
+    await new Promise((r) => setTimeout(r, 150));
+
+    const afterDisconnect = await fetchState();
+    expect(afterDisconnect.paused).toBe(true);
+    expect(afterDisconnect.timer.paused).toBe(true);
+
+    // Real wall-clock time passing while paused must not consume the timer.
+    await new Promise((r) => setTimeout(r, 400));
+    const stillFrozen = await fetchState();
+    expect(before.timer.remainingMs - stillFrozen.timer.remainingMs).toBeLessThanOrEqual(20);
+
+    await host.submit(BENCHMARK_INTENTS.RESUME, {});
+    await host.disconnect();
+  });
+
+  it('restores identity and stays paused after an active-player disconnect and reconnect', async () => {
+    const host = client(kind, unique('apReconHost'), true);
+    const playerId = unique('apReconPlayer');
+    const player = client(kind, playerId);
+    await host.connect();
+    await player.connect();
+    await host.submit(BENCHMARK_INTENTS.RESUME, {}).catch(() => undefined);
+
+    await player.disconnect();
+    await new Promise((r) => setTimeout(r, 150));
+    expect((await fetchState()).paused).toBe(true);
+
+    const reconnected = client(kind, playerId);
+    await reconnected.connect();
+    await new Promise((r) => setTimeout(r, 100));
+
+    const state = await fetchState();
+    const matching = state.clients.filter((c) => c.benchmarkClientId === playerId);
+    expect(matching).toHaveLength(1); // no duplicate
+    expect(matching[0]?.connected).toBe(true);
+
+    // The critical assertion: reconnecting must NOT resume gameplay.
+    expect(state.paused).toBe(true);
+
+    // Only the Host may resume, even now.
+    const byPlayer = await reconnected.submit(BENCHMARK_INTENTS.RESUME, {});
+    expect(byPlayer.ok).toBe(false);
+    if (!byPlayer.ok) expect(byPlayer.error.code).toBe('UNAUTHORIZED_ACTOR');
+
+    const byHost = await host.submit(BENCHMARK_INTENTS.RESUME, {});
+    expect(byHost.ok).toBe(true);
+
+    await Promise.all([host.disconnect(), reconnected.disconnect()]);
+  });
+
+  it('does not open/advance the buzzer because of an active-player disconnect', async () => {
+    const host = client(kind, unique('apBuzzHost'), true);
+    const player = client(kind, unique('apBuzzPlayer'));
+    await host.connect();
+    await player.connect();
+    await host.submit(BENCHMARK_INTENTS.RESUME, {}).catch(() => undefined);
+    await host.submit(BENCHMARK_INTENTS.RESET_BUZZER, {});
+
+    await host.submit(BENCHMARK_INTENTS.OPEN_BUZZER, {});
+    const before = await fetchState();
+    expect(before.buzzerOpen).toBe(true);
+
+    await player.disconnect();
+    await new Promise((r) => setTimeout(r, 150));
+
+    const after = await fetchState();
+    expect(after.paused).toBe(true);
+    // Authoritative buzzer state preserved exactly: still open, same round,
+    // no winner invented by the disconnect.
+    expect(after.buzzerOpen).toBe(true);
+    expect(after.buzzerRound).toBe(before.buzzerRound);
+
+    await host.submit(BENCHMARK_INTENTS.RESUME, {});
+    await host.submit(BENCHMARK_INTENTS.RESET_BUZZER, {});
+    await host.disconnect();
+  });
+
+  it('does not nest a second pause when another active player disconnects while already paused', async () => {
+    const host = client(kind, unique('apNestHost'), true);
+    const player1 = client(kind, unique('apNestP1'));
+    const player2 = client(kind, unique('apNestP2'));
+    await host.connect();
+    await player1.connect();
+    await player2.connect();
+    await host.submit(BENCHMARK_INTENTS.RESUME, {}).catch(() => undefined);
+
+    await player1.disconnect();
+    await new Promise((r) => setTimeout(r, 150));
+    const afterFirst = await fetchState();
+    expect(afterFirst.paused).toBe(true);
+
+    await player2.disconnect();
+    await new Promise((r) => setTimeout(r, 150));
+    const afterSecond = await fetchState();
+
+    expect(afterSecond.paused).toBe(true);
+    // Still the original reason/cause — not overwritten by the second
+    // disconnect while already paused.
+    expect(afterSecond.pausedByClientId).toBe(afterFirst.pausedByClientId);
+
+    await host.submit(BENCHMARK_INTENTS.RESUME, {});
+    await host.disconnect();
+  });
+
+  it('does not auto-pause when the Host disconnects', async () => {
+    const host = client(kind, unique('hostGoneHost'), true);
+    await host.connect();
+    await host.submit(BENCHMARK_INTENTS.RESUME, {}).catch(() => undefined);
+
+    await host.disconnect();
+    await new Promise((r) => setTimeout(r, 150));
+
+    const state = await fetchState();
+    expect(state.paused).toBe(false);
   });
 
   it('delivers events with strictly increasing sequence numbers', async () => {

@@ -78,6 +78,10 @@ export class BenchmarkSession {
 
   #seq = 0;
   #paused = false;
+  /** Why the session is currently paused. Null while running. */
+  #pauseReason: 'host_requested' | 'player_disconnect' | null = null;
+  /** The disconnected client that caused the current pause, if any. */
+  #pausedByClientId: string | null = null;
   #buzzerOpen = false;
   #buzzerOpenedAt = 0;
   #buzzerRound = 0;
@@ -95,19 +99,66 @@ export class BenchmarkSession {
   // Connection lifecycle
   // -------------------------------------------------------------------------
 
-  onDisconnect(connectionId: ConnectionId): string | null {
+  /**
+   * Handle a transport reporting that a connection closed.
+   *
+   * GAME_RULES_LOCKED.md §20 / DECISION_LOG.md D-011: "If an active player
+   * disconnects: gameplay pauses automatically." This is that rule, at
+   * benchmark scale.
+   *
+   * The transport reports only the raw fact of disconnection (per the
+   * RealtimeTransport contract — see packages/protocol/transport.ts: "the
+   * decision to pause belongs to the server, not here"). This method is where
+   * that decision is made, and it must distinguish:
+   *   - the Host disconnecting — no rule exists for this yet; logged only,
+   *     never treated as a reason to auto-pause, per explicit instruction not
+   *     to invent one,
+   *   - an ACTIVE PLAYER disconnecting — auto-pauses, exactly once, even if
+   *     the session is already paused,
+   *   - a connection that was never identified (HELLO never arrived, or this
+   *     connectionId already left) — nothing to pause for.
+   *
+   * Returns the events this produced, so the caller (the transport-neutral
+   * server wiring) can broadcast them exactly like any other accepted action.
+   */
+  onDisconnect(connectionId: ConnectionId): { clientId: string | null; events: EventEnvelope[] } {
     const clientId = this.#byConnection.get(connectionId);
-    if (clientId === undefined) return null;
+    if (clientId === undefined) return { clientId: null, events: [] };
 
     this.#byConnection.delete(connectionId);
     const client = this.#clients.get(clientId);
-    if (client !== undefined) {
-      // The identity survives; only the socket is gone. That is what makes a
-      // reconnect test meaningful.
-      client.connected = false;
-      client.connectionId = null;
+    if (client === undefined) return { clientId, events: [] };
+
+    // The identity survives; only the socket is gone. That is what makes a
+    // reconnect test meaningful.
+    client.connected = false;
+    client.connectionId = null;
+
+    const leftEvent = this.#emit(BENCHMARK_EVENTS.CLIENT_LEFT, { kind: 'server' }, {
+      benchmarkClientId: clientId,
+      isHost: client.isHost,
+    });
+    const events = [leftEvent];
+
+    // Do not invent a Host-disconnect rule. Log and stop here.
+    if (client.isHost) {
+      return { clientId, events };
     }
-    return clientId;
+
+    // An active player disconnected. Auto-pause — unless already paused, in
+    // which case the existing pause (and its return state) must not be
+    // disturbed or nested. The disconnect is still recorded via CLIENT_LEFT
+    // above regardless of pause state.
+    if (!this.#paused) {
+      const pauseEvent = this.#pauseInternal(
+        { kind: 'server' },
+        'player_disconnect',
+        clientId,
+      );
+      events.push(pauseEvent);
+    }
+
+    return { clientId, events };
   }
 
   // -------------------------------------------------------------------------
@@ -426,16 +477,41 @@ export class BenchmarkSession {
       return this.#reject(rejection('WRONG_STATE', 'Already paused.'));
     }
 
+    const event = this.#pauseInternal(this.#actorFor(connectionId), 'host_requested', null, intent.intentId);
+    return { ack: { ok: true, seq: event.seq }, events: [event] };
+  }
+
+  /**
+   * The one place pausing actually happens.
+   *
+   * Both a Host-initiated BENCHMARK_PAUSE and a server-detected active-player
+   * disconnect go through this. A single implementation is what makes it
+   * impossible for the two call sites to drift — for instance, for the
+   * disconnect path to forget to freeze the timer.
+   *
+   * Callers are responsible for the "already paused" guard: this method does
+   * not re-check it, because the disconnect path's "stay paused, do not
+   * nest" behaviour is a deliberate difference from #pause's "reject if
+   * already paused" — both are correct for their own caller, so the check
+   * belongs in the caller.
+   */
+  #pauseInternal(
+    actor: Actor,
+    reason: 'host_requested' | 'player_disconnect',
+    disconnectedClientId: string | null,
+    causedBy?: string,
+  ): EventEnvelope {
     this.#paused = true;
+    this.#pauseReason = reason;
+    this.#pausedByClientId = disconnectedClientId;
     if (this.#timer !== null) this.#timer = pauseDeadline(this.#clock, this.#timer);
 
-    const event = this.#emit(
+    return this.#emit(
       BENCHMARK_EVENTS.PAUSED,
-      this.#actorFor(connectionId),
-      {},
-      intent.intentId,
+      actor,
+      disconnectedClientId === null ? { reason } : { reason, disconnectedClientId },
+      causedBy,
     );
-    return { ack: { ok: true, seq: event.seq }, events: [event] };
   }
 
   /**
@@ -457,6 +533,8 @@ export class BenchmarkSession {
     }
 
     this.#paused = false;
+    this.#pauseReason = null;
+    this.#pausedByClientId = null;
     if (this.#timer !== null) this.#timer = resumeDeadline(this.#clock, this.#timer);
 
     const event = this.#emit(
@@ -517,6 +595,8 @@ export class BenchmarkSession {
       serverTime: this.#clock.now(),
       phase: this.#paused ? 'PAUSED' : 'ACTIVE_PLAY',
       paused: this.#paused,
+      pauseReason: this.#pauseReason,
+      pausedByClientId: this.#pausedByClientId,
       buzzerOpen: this.#buzzerOpen,
       buzzerRound: this.#buzzerRound,
       acceptedBuzz: this.#acceptedBuzz,

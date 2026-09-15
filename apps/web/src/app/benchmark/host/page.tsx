@@ -22,6 +22,8 @@ interface SnapshotState {
   seq: number;
   serverTime: number;
   paused: boolean;
+  pauseReason: 'host_requested' | 'player_disconnect' | null;
+  pausedByClientId: string | null;
   buzzerOpen: boolean;
   buzzerRound: number;
   acceptedBuzz: { benchmarkClientId: string; elapsedSinceOpenMs: number } | null;
@@ -157,7 +159,14 @@ export default function BenchmarkHostPage() {
           <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 12px', fontSize: 14 }}>
             <span style={muted}>Sequence</span><span>{snapshot.seq}</span>
             <span style={muted}>Server time</span><span>{snapshot.serverTime}</span>
-            <span style={muted}>Paused</span><span>{String(snapshot.paused)}</span>
+            <span style={muted}>Status</span>
+            <span style={{ color: snapshot.paused ? '#d99a2b' : '#5ec27e', fontWeight: 600 }}>
+              {snapshot.paused
+                ? snapshot.pauseReason === 'player_disconnect'
+                  ? `PAUSED — player disconnected (${snapshot.pausedByClientId ?? 'unknown'})`
+                  : 'PAUSED — Host requested'
+                : 'ACTIVE'}
+            </span>
             <span style={muted}>Buzzer</span>
             <span>{snapshot.buzzerOpen ? `OPEN (round ${snapshot.buzzerRound})` : 'closed'}</span>
             <span style={muted}>Accepted buzz</span>

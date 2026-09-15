@@ -138,6 +138,20 @@ export interface BenchmarkTimerStartedPayload {
   readonly durationMs: number;
 }
 
+/**
+ * Why the benchmark session paused.
+ *
+ * Mirrors GAME_RULES_LOCKED.md §20's PauseReason shape (host_requested vs an
+ * active player's connection dropping) at the scale this benchmark needs.
+ */
+export type BenchmarkPauseReason = 'host_requested' | 'player_disconnect';
+
+export interface BenchmarkPausedPayload {
+  readonly reason: BenchmarkPauseReason;
+  /** Set only when reason is player_disconnect. */
+  readonly disconnectedClientId?: string;
+}
+
 /** Everything a benchmark UI needs to render current state. */
 export interface BenchmarkSnapshotPayload {
   readonly protocolVersion: number;
@@ -146,6 +160,9 @@ export interface BenchmarkSnapshotPayload {
   readonly serverTime: number;
   readonly phase: string;
   readonly paused: boolean;
+  /** Present only while paused, so the Host panel can show why. */
+  readonly pauseReason: BenchmarkPauseReason | null;
+  readonly pausedByClientId: string | null;
   readonly buzzerOpen: boolean;
   readonly buzzerRound: number;
   readonly acceptedBuzz: BenchmarkBuzzAcceptedPayload | null;

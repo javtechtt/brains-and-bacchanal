@@ -75,11 +75,15 @@ export function createBenchmarkServer(logger: Logger, clock: Clock = new SystemC
     });
 
     transport.onDisconnect((connectionId) => {
-      const clientId = session.onDisconnect(connectionId);
+      const { clientId, events } = session.onDisconnect(connectionId);
       logger.debug(
         { transport: transport.kind, connectionId, clientId },
         'benchmark client disconnected',
       );
+      // The disconnect may have produced CLIENT_LEFT and, for an active
+      // player, an auto-pause — both must reach every connected client
+      // exactly like any Host-initiated action does.
+      for (const event of events) transport.broadcast(event);
     });
 
     transport.onIntent((connectionId, intent) => {

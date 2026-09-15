@@ -143,5 +143,17 @@ namespace BrainsAndBacchanal.Protocol
         public bool ok;
         public long seq;
         public Rejection error;
+
+        /// <summary>
+        /// Raw JSON of the `snapshot` field, for READ-ONLY intents that return
+        /// state directly in the acknowledgement.
+        ///
+        /// A read must not consume a sequence number or broadcast an event, so
+        /// BENCHMARK_REQUEST_SNAPSHOT answers in the ack rather than emitting a
+        /// BENCHMARK_SNAPSHOT event. Kept as raw JSON (not a typed field)
+        /// because JsonUtility cannot nest an arbitrary object — the caller
+        /// parses it into the concrete type it expects.
+        /// </summary>
+        [NonSerialized] public string snapshotJson;
     }
 }

@@ -124,16 +124,28 @@ namespace BrainsAndBacchanal.EditorTools
             var snapAck = await client.SubmitAsync(BenchmarkIntents.RequestSnapshot, "{}").ConfigureAwait(false);
             Check("snapshot request acknowledged", snapAck.ok, Describe(snapAck));
 
-            var snapFrame = await WaitForEvent(client, BenchmarkEvents.Snapshot, 5000).ConfigureAwait(false);
-            if (snapFrame != null)
+            // The snapshot arrives in the ACK, not as an event: a read must not
+            // consume a sequence number or broadcast to other clients.
+            Check("snapshot returned in the acknowledgement",
+                !string.IsNullOrEmpty(snapAck.snapshotJson), "no snapshot on ack");
+
+            if (!string.IsNullOrEmpty(snapAck.snapshotJson))
             {
-                var payloadJson = WireFraming.ExtractEventPayload(snapFrame);
-                if (payloadJson != null)
-                {
-                    var parsed = JsonUtility.FromJson<BenchmarkSnapshot>(payloadJson);
-                    if (parsed != null) snapshot = parsed;
-                }
+                var parsed = JsonUtility.FromJson<BenchmarkSnapshot>(snapAck.snapshotJson);
+                if (parsed != null) snapshot = parsed;
             }
+
+            // A read must not advance the sequence number. Two reads in a row
+            // should report the same seq, because nothing changed.
+            var seqBefore = snapshot?.seq ?? -1;
+            var secondRead = await client.SubmitAsync(BenchmarkIntents.RequestSnapshot, "{}")
+                .ConfigureAwait(false);
+            var secondSnap = string.IsNullOrEmpty(secondRead.snapshotJson)
+                ? null
+                : JsonUtility.FromJson<BenchmarkSnapshot>(secondRead.snapshotJson);
+            Check("reads do not consume sequence numbers",
+                secondSnap != null && secondSnap.seq == seqBefore,
+                $"seq went {seqBefore} -> {secondSnap?.seq}");
 
             if (snapshot != null)
             {

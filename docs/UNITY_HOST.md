@@ -414,14 +414,39 @@ time not to consume the remaining time. The panel shows both
 `Timer remaining (ms, displayed)` and `Timer remaining (ms, server)` so the two
 can be compared during testing.
 
-Two consequences of polling had to be handled at the same time:
+A background poll also no longer overwrites "Last acknowledgement" on success —
+it would erase the result of whatever button the operator just pressed. A
+**failed** poll still reports, because a silently dead refresh loop should stay
+visible.
 
-- `BENCHMARK_SNAPSHOT` is no longer written to the "recent events" list, or
-  polling noise would bury every real event.
-- A background poll no longer overwrites "Last acknowledgement" on success — it
-  would erase the result of whatever button the operator just pressed. A
-  **failed** poll still reports, because a silently dead refresh loop should be
-  visible.
+### 2b. Snapshot requests were spending sequence numbers (server-side)
+
+Polling immediately exposed a **protocol design flaw** that had been invisible
+while nothing polled: `BENCHMARK_REQUEST_SNAPSHOT` **emitted a broadcast event
+and consumed a sequence number** — for a pure read.
+
+The symptom was a wall of `BENCHMARK_SNAPSHOT` lines in every client's event
+feed. The real damage was worse: an idle session burned ~10 sequence numbers
+every 5 seconds (measured: 529 → 539 with nothing happening).
+
+That contradicts `docs/PROTOCOL.md` directly — sequence numbers mark **accepted
+state changes**, and *"a gap tells a client it missed an event and should
+request a snapshot"*. Spending them on reads corrupts the one signal clients use
+to detect genuine loss, and makes the event log useless for understanding how
+the current state was reached.
+
+**Fixed at the server**, which is where the flaw was: a snapshot request now
+returns state in the **acknowledgement** and emits nothing. `IntentAck` gained
+an optional `snapshot` field for read-only intents. The requester gets exactly
+what it asked for, no other client is disturbed, and the `seq` reported is
+simply the latest real one.
+
+After the fix a fresh session sits at `seq=1` and holds steady under continuous
+polling, where the old behaviour had reached 539.
+
+Four server tests now enforce this: a read consumes no sequence number, emits no
+event, returns the snapshot in the ack, and reports the latest *real* sequence
+number.
 
 ### 3. Unity main-thread deadlock
 

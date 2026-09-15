@@ -242,6 +242,15 @@ namespace BrainsAndBacchanal
         {
             var ack = await _client.SubmitAsync(BenchmarkIntents.RequestSnapshot, "{}");
             if (!isBackgroundPoll || !ack.ok) _lastAck = Describe(ack);
+
+            // The snapshot comes back in the acknowledgement, not as an event —
+            // a read must not consume a sequence number or disturb other
+            // clients. See BenchmarkSession#snapshotAck.
+            if (ack.ok && !string.IsNullOrEmpty(ack.snapshotJson))
+            {
+                var snap = SafeParse<BenchmarkSnapshot>(ack.snapshotJson);
+                if (snap != null) ApplySnapshot(snap);
+            }
         }
 
         private async void SendTestIntent()
@@ -290,13 +299,7 @@ namespace BrainsAndBacchanal
                 return;
             }
 
-            // Snapshots are now requested twice a second to keep the countdown
-            // live, so logging them would bury every real event under polling
-            // noise. The state they carry is still applied below.
-            if (envelope.type != BenchmarkEvents.Snapshot)
-            {
-                Record($"#{envelope.seq} {envelope.type}");
-            }
+            Record($"#{envelope.seq} {envelope.type}");
 
             var payloadJson = WireFraming.ExtractEventPayload(frame);
             if (payloadJson == null) return;
@@ -309,13 +312,6 @@ namespace BrainsAndBacchanal
                 {
                     var joined = SafeParse<BenchmarkClientJoinedPayload>(payloadJson);
                     if (joined?.snapshot != null) ApplySnapshot(joined.snapshot);
-                    break;
-                }
-
-                case BenchmarkEvents.Snapshot:
-                {
-                    var snap = SafeParse<BenchmarkSnapshot>(payloadJson);
-                    if (snap != null) ApplySnapshot(snap);
                     break;
                 }
 

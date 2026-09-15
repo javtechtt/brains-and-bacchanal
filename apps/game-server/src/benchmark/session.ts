@@ -593,14 +593,30 @@ export class BenchmarkSession {
     return { ack: { ok: true, seq: event.seq }, events: [event] };
   }
 
-  #snapshotAck(intent: IntentEnvelope): { ack: IntentAck; events: EventEnvelope[] } {
-    const event = this.#emit(
-      BENCHMARK_EVENTS.SNAPSHOT,
-      { kind: 'server' },
-      this.snapshot(),
-      intent.intentId,
-    );
-    return { ack: { ok: true, seq: event.seq }, events: [event] };
+  /**
+   * Serve current state to the requesting client.
+   *
+   * A snapshot request is a READ. It changes nothing, so it must not consume a
+   * sequence number and must not broadcast to anyone else.
+   *
+   * It originally did both, and real use exposed why that was wrong: once the
+   * Unity Host began polling twice a second to keep its countdown live, an idle
+   * session burned ~10 sequence numbers every 5 seconds and every other client's
+   * event feed filled with BENCHMARK_SNAPSHOT. docs/PROTOCOL.md is explicit that
+   * sequence numbers mark ACCEPTED STATE CHANGES and that a gap means a client
+   * missed something — so spending them on reads corrupts the one signal clients
+   * use to detect real loss, and makes the event log useless for seeing how the
+   * current state was reached.
+   *
+   * The snapshot is returned in the acknowledgement instead: the requester gets
+   * exactly what it asked for, nobody else is disturbed, and the sequence number
+   * reported is simply the latest real one.
+   */
+  #snapshotAck(_intent: IntentEnvelope): { ack: IntentAck; events: EventEnvelope[] } {
+    return {
+      ack: { ok: true, seq: asSequenceNumber(this.#seq), snapshot: this.snapshot() },
+      events: [],
+    };
   }
 
   // -------------------------------------------------------------------------

@@ -40,7 +40,23 @@ export type TransportKind = 'socketio' | 'websocket';
  * being left uncertain.
  */
 export type IntentAck =
-  | { readonly ok: true; readonly seq: SequenceNumber }
+  | {
+      readonly ok: true;
+      readonly seq: SequenceNumber;
+      /**
+       * State returned directly to the requester, for READ-ONLY intents.
+       *
+       * A read changes nothing, so it must not consume a sequence number or
+       * broadcast an event to other clients — see BenchmarkSession#snapshotAck.
+       * Returning the result in the acknowledgement keeps reads off the event
+       * log entirely, so sequence numbers continue to mean "accepted state
+       * change" and a gap continues to mean "you missed something".
+       *
+       * Deliberately unknown: the protocol layer does not model per-intent
+       * payload shapes (see IntentEnvelope.payload, same reasoning).
+       */
+      readonly snapshot?: unknown;
+    }
   | { readonly ok: false; readonly error: Rejection };
 
 /** Called when a client submits an intent. Returns the reply to send back. */

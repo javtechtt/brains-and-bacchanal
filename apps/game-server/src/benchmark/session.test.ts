@@ -347,6 +347,53 @@ describe('pause and resume', () => {
   });
 });
 
+// A snapshot request is a READ. docs/PROTOCOL.md: sequence numbers mark
+// ACCEPTED STATE CHANGES, and a gap tells a client it missed one. Spending them
+// on reads corrupts that signal and floods every other client's event feed —
+// which is exactly what happened once the Unity Host began polling twice a
+// second to keep its countdown live.
+describe('snapshot requests are reads', () => {
+  it('does not consume a sequence number', () => {
+    setupHostAndPlayers(1);
+    const before = session.seq;
+
+    session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.REQUEST_SNAPSHOT));
+    session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.REQUEST_SNAPSHOT));
+    session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.REQUEST_SNAPSHOT));
+
+    expect(session.seq).toBe(before);
+  });
+
+  it('does not broadcast an event to other clients', () => {
+    setupHostAndPlayers(1);
+    const { events } = session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.REQUEST_SNAPSHOT));
+    expect(events).toHaveLength(0);
+  });
+
+  it('returns the snapshot in the acknowledgement instead', () => {
+    setupHostAndPlayers(1);
+    const { ack } = session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.REQUEST_SNAPSHOT));
+
+    expect(ack.ok).toBe(true);
+    if (ack.ok) {
+      const snapshot = ack.snapshot as { phase: string; clients: unknown[] } | undefined;
+      expect(snapshot).toBeDefined();
+      expect(snapshot?.phase).toBeDefined();
+      expect(snapshot?.clients).toHaveLength(2);
+    }
+  });
+
+  it('reports the latest real sequence number, not an inflated one', () => {
+    setupHostAndPlayers(1);
+    // One genuine state change, so there is a real sequence number to report.
+    session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.OPEN_BUZZER));
+    const afterChange = session.seq;
+
+    const { ack } = session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.REQUEST_SNAPSHOT));
+    if (ack.ok) expect(ack.seq).toBe(afterChange);
+  });
+});
+
 describe('timer', () => {
   it('does not consume remaining time while paused', () => {
     setupHostAndPlayers(1);

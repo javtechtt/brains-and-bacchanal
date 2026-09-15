@@ -89,7 +89,14 @@ namespace BrainsAndBacchanal.Protocol
             if (inner == null) return null;
             try
             {
-                return JsonUtility.FromJson<IntentAck>(inner);
+                var ack = JsonUtility.FromJson<IntentAck>(inner);
+
+                // A read-only intent returns its result in the ack. JsonUtility
+                // cannot nest an arbitrary object, so carry it as raw JSON for
+                // the caller to parse into the type it expects.
+                if (ack != null) ack.snapshotJson = ExtractObject(inner, "snapshot");
+
+                return ack;
             }
             catch (Exception)
             {

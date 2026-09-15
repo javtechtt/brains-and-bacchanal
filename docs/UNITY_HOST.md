@@ -3,13 +3,13 @@
 The Unity Host Display, and the Phase 3 test that proves Unity can act as a
 client of the authoritative game server.
 
-> **Status: raw WebSocket compatibility is PROVEN. IL2CPP build is BLOCKED.**
+> **Status: raw WebSocket compatibility is PROVEN in Editor AND IL2CPP standalone.**
 >
 > The Editor runtime test passes **27/27 checks against the live benchmark
-> server**, and a Mono Windows standalone `.exe` builds and runs cleanly. The
-> **IL2CPP** build is blocked on a missing Windows SDK, and the real-device
-> phone tests have not yet been run. Until those are done, the Phase 3
-> transport decision stays **OPEN**.
+> server**, and both Mono and **IL2CPP** Windows standalone `.exe` builds
+> succeed and run cleanly with zero exceptions. The **real-device phone tests
+> (A-E) have not yet been run**. Until they are, the Phase 3 transport decision
+> stays **OPEN**.
 
 ---
 
@@ -282,32 +282,61 @@ repeated `intentId` comes back `DUPLICATE_INTENT`.
 
 ### Windows standalone — Mono PASS, IL2CPP BLOCKED
 
-**Mono:** builds (123 MB, 0 errors) and the `.exe` **runs cleanly** — window
-opens, D3D11 initialises, no exceptions in the player log.
+**Mono: PASS, confirmed running against the live server.** Builds (123 MB, 0
+errors), the `.exe` runs cleanly (window opens, D3D11 initialises, no
+exceptions), and when connected it correctly rendered authoritative state:
 
-**IL2CPP: BLOCKED.**
+```text
+Latest sequence number   16
+Session state            PAUSED
+Paused                   PAUSED — player disconnected (probe-client)
+Transports               socketio=0 websocket=1
+CONNECTED BENCHMARK CLIENTS (4)
+  [online ] HOST  unity-host  (websocket)
+RECENT SERVER EVENTS
+  #17 BENCHMARK_SNAPSHOT
+  #16 BENCHMARK_CLIENT_JOINED
+```
+
+Note what this demonstrates beyond "it connected": the standalone player
+received a `CLIENT_JOINED` then a `SNAPSHOT`, identified itself as HOST over
+`websocket`, listed all four known clients with their per-client transports,
+and rendered the **auto-pause reason including which client caused it**
+(`player disconnected (probe-client)`) — all of it read from server state, none
+of it decided locally.
+
+**IL2CPP: PASS.**
+
+```text
+result=Succeeded errors=0 warnings=0 sizeBytes=529318874 time=00:02:50
+```
+
+Verified to be genuinely IL2CPP rather than a silent Mono fallback:
+`GameAssembly.dll` (25 MB of compiled C++) and `il2cpp_data/` are present, and
+there is **no** `MonoBleedingEdge` runtime in the output.
+
+The `.exe` launches and runs with **zero exceptions** in the player log — no
+AOT/stripping failures, which was the main risk for a reflection-based
+`JsonUtility` path. `ManagedStrippingLevel.Minimal` is set in the builder to
+keep that risk low.
+
+#### The blocker this hit first, and the fix
+
+The initial attempt failed with:
 
 ```text
 Could not set up a toolchain for Architecture x64.
 IL2CPP C++ code builder is unable to build C++ code.
 ```
 
-IL2CPP transpiles C# to C++ and therefore needs a **C++ toolchain beyond Unity's
-own build-support module**. On this machine:
+IL2CPP transpiles C# to C++ and needs a **C++ toolchain beyond Unity's own
+build-support module**. MSVC was present (Visual Studio Community 2026, MSVC
+14.51.36231) but the **Windows SDK was missing** — `Windows Kits\10` contained
+only `UnionMetadata`, no `Include\` or `Lib\`.
 
-- MSVC compiler **present** — Visual Studio Community 2026, MSVC 14.51.36231
-- Windows 10/11 SDK **missing** — `C:\Program Files (x86)\Windows Kits\10`
-  contains only `UnionMetadata`; there is no `Include\` or `Lib\`
-
-Fix: in the **Visual Studio Installer**, modify VS 2026 → Individual components →
-add a **Windows 11 SDK** (and confirm *MSVC v143+ x64/x86 build tools*).
-
-**A Mono pass does not substitute for IL2CPP.** IL2CPP/AOT is exactly where
-managed-code stripping and missing AOT generics can break a reflection-based
-JSON path that works fine under Mono — and `JsonUtility` reflects over these
-DTOs. The IL2CPP build must be run before the Host is considered proven.
-(`ManagedStrippingLevel.Minimal` is already set in the builder to reduce, but
-not eliminate, that risk.)
+Fixed by installing a Windows SDK via the Visual Studio Installer. Worth
+recording for anyone setting up a new build machine: *Unity's build-support
+module alone is not sufficient for IL2CPP.*
 
 ### Compilation — PASS
 

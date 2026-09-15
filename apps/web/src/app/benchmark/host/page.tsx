@@ -38,11 +38,17 @@ export default function BenchmarkHostPage() {
   const [snapshot, setSnapshot] = useState<SnapshotState | null>(null);
   const [lastMessage, setLastMessage] = useState<string>('');
   const clientRef = useRef<BrowserBenchmarkClient | null>(null);
-  const identity = useRef<string>('');
 
-  if (identity.current === '' && typeof window !== 'undefined') {
-    identity.current = benchmarkIdentity('host');
-  }
+  // Resolved client-side only, after mount — see the identical comment in
+  // benchmark/player/page.tsx. This page happened not to trigger a hydration
+  // mismatch because it never rendered identity.current in JSX before mount,
+  // but computing it during render was equally unsafe here.
+  const [identityValue, setIdentityValue] = useState('');
+  useEffect(() => {
+    setIdentityValue(benchmarkIdentity('host'));
+  }, []);
+  const identity = useRef<string>('');
+  identity.current = identityValue;
 
   const refresh = useCallback(async () => {
     try {

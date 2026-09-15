@@ -19,7 +19,8 @@
     "test:watch": "vitest",
     "clean": "pnpm --recursive exec rimraf dist .next .turbo *.tsbuildinfo",
     "benchmark:server": "pnpm --filter @bb/game-server benchmark:server:dev",
-    "benchmark": "pnpm --filter @bb/game-server benchmark:dev"
+    "benchmark": "pnpm --filter @bb/game-server benchmark:dev",
+    "benchmark:observe": "pnpm --filter @bb/game-server benchmark:observe:dev"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

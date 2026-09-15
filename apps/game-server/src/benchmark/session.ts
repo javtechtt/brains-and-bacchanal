@@ -251,6 +251,37 @@ export class BenchmarkSession {
     const denial = this.#requireHost(connectionId);
     if (denial !== null) return denial;
 
+    // Rule 1: paused sessions must not advance benchmark gameplay. Opening the
+    // buzzer while paused is gameplay progress, not a safe non-gameplay action.
+    if (this.#paused) {
+      return this.#reject(rejection('WRONG_STATE', 'The session is paused.'));
+    }
+
+    // Rule 2: an already-open buzzer must reject a second open outright — no
+    // new BENCHMARK_BUZZER_OPENED event and no round increment. Without this,
+    // two Host clicks (or one slow ack followed by a retry with a fresh
+    // intentId, which Phase 2 deduplication cannot catch since it is a
+    // different intent) silently re-arm the buzzer and corrupt the round
+    // count, which is exactly what real-device testing surfaced.
+    if (this.#buzzerOpen) {
+      return this.#reject(
+        rejection('WRONG_STATE', 'The buzzer is already open.', {
+          round: this.#buzzerRound,
+        }),
+      );
+    }
+
+    // Rule 3: an accepted buzz locks the round. Opening again requires an
+    // explicit Host reset first, so a trial's winner is never silently
+    // overwritten by re-opening on top of it.
+    if (this.#acceptedBuzz !== null) {
+      return this.#reject(
+        rejection('WRONG_STATE', 'Reset the buzzer before opening the next round.', {
+          winner: this.#acceptedBuzz.benchmarkClientId,
+        }),
+      );
+    }
+
     this.#buzzerOpen = true;
     this.#buzzerOpenedAt = this.#clock.now();
     this.#buzzerRound += 1;
@@ -355,6 +386,12 @@ export class BenchmarkSession {
   ): { ack: IntentAck; events: EventEnvelope[] } {
     const denial = this.#requireHost(connectionId);
     if (denial !== null) return denial;
+
+    // Rule 1: starting a timer is gameplay progress and must not be allowed
+    // while paused.
+    if (this.#paused) {
+      return this.#reject(rejection('WRONG_STATE', 'The session is paused.'));
+    }
 
     const payload = intent.payload as Record<string, unknown>;
     const durationMs = typeof payload['durationMs'] === 'number' ? payload['durationMs'] : 30_000;

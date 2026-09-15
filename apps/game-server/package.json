@@ -12,7 +12,9 @@
     "benchmark:server": "node dist/benchmark/index.js",
     "benchmark:server:dev": "tsx src/benchmark/index.ts",
     "benchmark": "node dist/benchmark/cli.js",
-    "benchmark:dev": "tsx src/benchmark/cli.ts"
+    "benchmark:dev": "tsx src/benchmark/cli.ts",
+    "benchmark:observe": "node dist/benchmark/observe.js",
+    "benchmark:observe:dev": "tsx src/benchmark/observe.ts"
   },
   "dependencies": {
     "@bb/game-rules": "workspace:*",

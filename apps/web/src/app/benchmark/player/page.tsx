@@ -38,11 +38,19 @@ export default function BenchmarkPlayerPage() {
   const [offset, setOffset] = useState<number | null>(null);
   const [lastAck, setLastAck] = useState('');
   const clientRef = useRef<BrowserBenchmarkClient | null>(null);
-  const identity = useRef('');
 
-  if (identity.current === '' && typeof window !== 'undefined') {
-    identity.current = benchmarkIdentity('player');
-  }
+  // Resolved client-side only, after mount. Reading localStorage during
+  // render causes a hydration mismatch: the server has no window and renders
+  // an empty identity, then the client would compute a real one during the
+  // same render pass, so React sees different text on each side (error #418).
+  // useEffect runs strictly after hydration, so the server/client HTML always
+  // agree first, and the real identity fills in a moment later.
+  const [identityValue, setIdentityValue] = useState('');
+  useEffect(() => {
+    setIdentityValue(benchmarkIdentity('player'));
+  }, []);
+  const identity = useRef('');
+  identity.current = identityValue;
 
   useEffect(() => {
     const id = setInterval(() => {

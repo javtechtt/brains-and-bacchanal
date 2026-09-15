@@ -188,6 +188,85 @@ describe('benchmark buzzer', () => {
     expect(ack.ok).toBe(false);
     if (!ack.ok) expect(ack.error.code).toBe('UNAUTHORIZED_ACTOR');
   });
+
+  // Found from real two-phone LAN testing: the Host panel's "open" click was
+  // received twice (a slow ack followed by a retry with a fresh intentId, so
+  // Phase 2 deduplication does not apply — this is two distinct intents, not
+  // a duplicate of one). The state showed two consecutive BUZZER_OPENED
+  // events and an incremented round with no reset or accepted buzz between
+  // them.
+  it('rejects opening an already-open buzzer', () => {
+    setupHostAndPlayers(1);
+    const first = session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.OPEN_BUZZER));
+    const roundAfterFirst = session.snapshot().buzzerRound;
+
+    const second = session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.OPEN_BUZZER));
+
+    expect(first.ack.ok).toBe(true);
+    expect(second.ack.ok).toBe(false);
+    if (!second.ack.ok) expect(second.ack.error.code).toBe('WRONG_STATE');
+
+    // No second BUZZER_OPENED event and no round increment.
+    expect(session.snapshot().buzzerRound).toBe(roundAfterFirst);
+    const opens = session.snapshot(); // sanity: still exactly one open buzzer
+    expect(opens.buzzerOpen).toBe(true);
+  });
+
+  it('does not emit a second BUZZER_OPENED event when already open', () => {
+    setupHostAndPlayers(1);
+    session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.OPEN_BUZZER));
+    const { events } = session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.OPEN_BUZZER));
+    expect(events).toHaveLength(0);
+  });
+
+  it('rejects opening again after an accepted buzz until reset', () => {
+    setupHostAndPlayers(1);
+    session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.OPEN_BUZZER));
+    session.handle(P1, intent(BENCHMARK_INTENTS.BUZZ));
+    expect(session.acceptedBuzz).not.toBeNull();
+
+    const reopen = session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.OPEN_BUZZER));
+    expect(reopen.ack.ok).toBe(false);
+    if (!reopen.ack.ok) expect(reopen.ack.error.code).toBe('WRONG_STATE');
+    // The winner must not be silently overwritten.
+    expect(session.acceptedBuzz?.benchmarkClientId).toBe('player-1');
+  });
+
+  it('allows opening the next round after an explicit reset', () => {
+    setupHostAndPlayers(1);
+    session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.OPEN_BUZZER));
+    session.handle(P1, intent(BENCHMARK_INTENTS.BUZZ));
+
+    const reset = session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.RESET_BUZZER));
+    expect(reset.ack.ok).toBe(true);
+
+    const reopen = session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.OPEN_BUZZER));
+    expect(reopen.ack.ok).toBe(true);
+    expect(session.acceptedBuzz).toBeNull();
+  });
+
+  it('rejects opening the buzzer while paused', () => {
+    setupHostAndPlayers(1);
+    session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.PAUSE));
+
+    const { ack, events } = session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.OPEN_BUZZER));
+    expect(ack.ok).toBe(false);
+    if (!ack.ok) expect(ack.error.code).toBe('WRONG_STATE');
+    expect(events).toHaveLength(0);
+    expect(session.snapshot().buzzerOpen).toBe(false);
+  });
+
+  it('rejects duplicate OPEN_BUZZER intents from rapid repeated clicks', () => {
+    // Same underlying rule as the WRONG_STATE cases above, exercised the way a
+    // real double-click or a retried request actually arrives: several
+    // distinct intentIds submitted back to back.
+    setupHostAndPlayers(1);
+    const results = [1, 2, 3, 4].map(() =>
+      session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.OPEN_BUZZER)),
+    );
+    expect(results.filter((r) => r.ack.ok)).toHaveLength(1);
+    expect(session.snapshot().buzzerRound).toBe(1);
+  });
 });
 
 describe('pause and resume', () => {
@@ -229,6 +308,38 @@ describe('pause and resume', () => {
     const { ack } = session.handle(P1, intent(BENCHMARK_INTENTS.BUZZ));
     expect(ack.ok).toBe(false);
     if (!ack.ok) expect(ack.error.code).toBe('WRONG_STATE');
+  });
+
+  it('rejects starting a timer while paused', () => {
+    setupHostAndPlayers(1);
+    session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.PAUSE));
+
+    const { ack, events } = session.handle(
+      HOST_CONN,
+      intent(BENCHMARK_INTENTS.START_TIMER, { durationMs: 10_000 }),
+    );
+    expect(ack.ok).toBe(false);
+    if (!ack.ok) expect(ack.error.code).toBe('WRONG_STATE');
+    expect(events).toHaveLength(0);
+    expect(session.snapshot().timer.active).toBe(false);
+  });
+
+  it('allows resetting the buzzer while paused (safe, non-advancing)', () => {
+    setupHostAndPlayers(1);
+    session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.OPEN_BUZZER));
+    session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.PAUSE));
+
+    const { ack } = session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.RESET_BUZZER));
+    expect(ack.ok).toBe(true);
+    expect(session.snapshot().buzzerOpen).toBe(false);
+  });
+
+  it('allows requesting a snapshot while paused', () => {
+    setupHostAndPlayers(1);
+    session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.PAUSE));
+
+    const { ack } = session.handle(HOST_CONN, intent(BENCHMARK_INTENTS.REQUEST_SNAPSHOT));
+    expect(ack.ok).toBe(true);
   });
 });
 

@@ -50,7 +50,10 @@ content/sealed/
 *.production.json
 
 # ---------------------------------------------------------------------------
-# Unity — see docs/ARCHITECTURE.md §1 (Host Display) and Phase 8
+# Unity Host Display — see docs/UNITY_HOST.md and docs/ARCHITECTURE.md §1
+#
+# Assets/, Packages/ and ProjectSettings/ are the project and ARE tracked.
+# Everything below is generated, machine-specific or a build output.
 # ---------------------------------------------------------------------------
 unity/host/Library/
 unity/host/Temp/
@@ -61,6 +64,13 @@ unity/host/Logs/
 unity/host/UserSettings/
 unity/host/MemoryCaptures/
 unity/host/Recordings/
+unity/host/ShaderCache/
+unity/host/Artifacts/
+unity/host/.vs/
+unity/host/.vscode/
+
+# Unity batch-mode logs written at the repo root by the test/build scripts.
+unity_*.log
 *.csproj
 *.unityproj
 *.sln

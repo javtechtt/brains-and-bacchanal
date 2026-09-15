@@ -83,3 +83,6 @@ unity_*.log
 *.aab
 sysinfo.txt
 crashlytics-build.properties
+
+# Ephemeral development token for cloud benchmark testing. Never commit.
+.cloud-test-token

@@ -301,30 +301,108 @@ expose port 4500 to the internet.
 
 ## Cloud testing
 
-**Not performed. No cloud measurements exist, and none are invented below.**
+**PERFORMED.** Both transports measured over a real public internet path with
+TLS and a real reverse proxy.
 
-The benchmark takes `--host` and `--port`, so the same scenarios run against a
-deployment without code changes:
+### How it was done, and what that does and does not prove
+
+The benchmark server ran locally and was exposed through a **Cloudflare Tunnel**
+at a public `https://…trycloudflare.com` URL. Free, no account, nothing left
+deployed.
+
+That genuinely exercises the thing the Phase 3 decision hinged on:
+
+- real **TLS termination** (`wss://`),
+- a real **reverse proxy** performing the HTTP/1.1 upgrade,
+- a real **round trip out to the internet and back** (~98 ms, versus ~0 ms on
+  loopback),
+- real proxy connection handling and idle behaviour.
+
+**What it does not prove:** the server itself was not in a datacentre, so these
+are not hosting-provider latency figures, and provider-specific quirks (App
+Service, Container Apps, a specific load balancer) are untested. The RTT here
+reflects the path to Cloudflare's edge and back, which is a realistic
+*shape* for online play but not a specific deployment's number.
+
+Azure was the original plan. It was abandoned when the CLI required an
+interactive re-login, the `containerapp` extension failed to install (pip exit
+`3221225477`), and Docker Desktop was not running — none of which was worth
+solving once a free path answered the actual question.
+
+### Security note
+
+The benchmark session has no authentication: any connected client may claim
+`isHost` and then pause the session or open the buzzer. Exposing that publicly
+needed a door lock first, so `BENCHMARK_ACCESS_TOKEN` now gates the WebSocket
+upgrade on **both** transports plus `/benchmark/state`. `/health` stays open for
+platform probes. Unset means open, so LAN testing is unchanged. See
+`apps/game-server/src/benchmark/access.ts` — it is explicitly **not** the
+production auth model, which Phase 4 builds.
+
+### Results — public internet, via Cloudflare (3 clients, 30 pings)
+
+| Metric | Raw WebSocket | Socket.IO |
+|---|---|---|
+| **Connects through TLS proxy** | **yes** | **yes** |
+| RTT median | 98 ms | 98 ms |
+| RTT p95 | 99 ms | 103 ms |
+| RTT p99 | 99 ms | 113 ms |
+| RTT min / max | 98 / 99 ms | 97 / 113 ms |
+| Jitter (mean \|Δrtt\|) | **0.45 ms** | 1.24 ms |
+| Out-of-order events | 0 | 0 |
+| Duplicated events | 0 | 0 |
+| Duplicate intent rejected | yes, with `originalSeq` | yes, with `originalSeq` |
+| Buzzer: one winner per trial | **yes** (3 accepted / 6 rejected) | **yes** (3 accepted / 6 rejected) |
+| Reconnect time | 333–359 ms | 442 ms |
+| Identity restored, no duplicate | yes | yes |
+| **Auto-resumed on reconnect** | **no** (required) | **no** (required) |
+| Player resume rejected | `UNAUTHORIZED_ACTOR` | `UNAUTHORIZED_ACTOR` |
+| Timer consumed while paused | **0 ms** | 109 ms |
+
+### Reading these numbers honestly
+
+**The headline result is that raw WebSockets connected at all.** The one
+scenario that could have reversed the transport recommendation was a proxy
+refusing or mangling the upgrade, leaving Socket.IO's HTTP long-polling fallback
+as the only thing that worked. That did not happen — both connected and behaved
+correctly.
+
+Differences worth noting, none of them decisive:
+
+- **Median RTT is identical (98 ms).** Dominated by network distance, not by
+  transport.
+- **WebSocket showed tighter tails** (p99 99 ms vs 113 ms) and about **a third
+  the jitter**. Real, but small next to a ~98 ms baseline, and a single sample
+  on one network path — not enough to claim a systematic advantage.
+- **The 109 ms "consumed while paused" on Socket.IO is measurement artefact,
+  not a rules violation.** The runner measures remaining time either side of a
+  pause across a ~98 ms network hop, so a sub-RTT discrepancy is expected. The
+  deterministic `FakeClock` tests prove the pause arithmetic exactly, and the
+  WebSocket run happened to land on 0 ms.
+- **Buzzer fairness is unchanged by distance:** exactly one winner per trial on
+  both, decided by server receive order, with the accepted buzz landing ~98 ms
+  after open — i.e. one network hop, as expected.
+
+### Reproducing it
 
 ```bash
-pnpm benchmark --transport both --host <deployed-host> --port 443
+# 1. Start the server with a token
+BENCHMARK_ACCESS_TOKEN=$(openssl rand -base64url 18) pnpm benchmark:server
+
+# 2. Expose it (free, no account)
+cloudflared tunnel --url http://127.0.0.1:4500
+
+# 3. Run against the public URL
+pnpm benchmark --transport both   --host <name>.trycloudflare.com --port 0 --secure   --token <the token> --clients 3 --pings 30
 ```
 
-Procedure when a deployment exists:
+`--port 0` means "use the scheme default", which is what a TLS ingress on 443
+needs.
 
-1. Deploy `apps/game-server` with the benchmark entry point enabled.
-2. Ensure the platform supports **WebSocket upgrades** (some require explicit
-   configuration; some proxies buffer or drop them).
-3. Run the synthetic benchmark from a machine on a normal internet connection,
-   not the same datacentre.
-4. Repeat the phone procedure over mobile data rather than Wi-Fi.
-5. Record results in the cloud table below.
-
-Cloud behaviour matters disproportionately for Socket.IO because its fallback
-and reconnection logic exist precisely for hostile networks. Local numbers
-cannot predict it.
-
----
+**One operational gotcha:** the buzzer trials fail with `WRONG_STATE` if the
+session is left **paused** from earlier testing — which it will be, because a
+disconnecting synthetic client correctly triggers the auto-pause rule. Resume
+before a buzzer run, or the trials silently report 0 accepted.
 
 ## Unity
 
@@ -470,16 +548,27 @@ Follow the phone procedure above and enter what you observe.
 | Screen sleep / wake recovered? | | |
 | Anything felt wrong or slow? | | |
 
-## Results — cloud (PENDING)
+## Results — cloud (COMPLETE)
+
+Measured over a real public internet path with TLS and a real reverse proxy —
+full detail and caveats in [Cloud testing](#cloud-testing) above.
 
 | Metric | Socket.IO | Raw WebSocket |
 |---|---|---|
-| RTT median | | |
-| RTT p95 / p99 | | |
-| Jitter | | |
-| Reconnect time | | |
-| Behaviour on mobile data | | |
-| Proxy / upgrade problems | | |
+| Connects through TLS proxy | yes | **yes** |
+| RTT median | 98 ms | 98 ms |
+| RTT p95 / p99 | 103 / 113 ms | **99 / 99 ms** |
+| Jitter | 1.24 ms | **0.45 ms** |
+| Reconnect time | 442 ms | 333–359 ms |
+| Ordering / duplicate faults | 0 | 0 |
+| Buzzer: one winner per trial | yes | yes |
+| Proxy / upgrade problems | none | **none** |
+| Behaviour on mobile data | not tested | not tested |
+
+**The decisive line is the first one.** The scenario that could have reversed
+the transport recommendation — a proxy breaking the raw WebSocket upgrade,
+leaving Socket.IO's long-polling fallback as the only thing that worked — did
+not occur.
 
 ## Results — Unity (COMPLETE)
 
@@ -519,14 +608,21 @@ before it outweighs simplicity and Unity compatibility.**
 
 ## Known limitations of the current results
 
-1. **Latency numbers are loopback only.** Sub-millisecond RTT is an artefact.
-   Real-device testing confirmed *correct behaviour* on LAN, but no p95/p99
-   latency figures were captured from the phones.
-2. **No cloud measurements.** None invented.
+1. **The cloud test tunnelled to a local server.** Real TLS, real proxy, real
+   ~98 ms internet round trip — but the server was not in a datacentre, so
+   these are not hosting-provider latency figures, and no specific provider's
+   ingress was exercised.
+2. **Mobile data was not tested.** Phone testing was LAN Wi-Fi only. Captive
+   portals and carrier-grade NAT remain unmeasured.
 3. **Socket.IO was not tested in Unity** — deliberately, rather than add an
    unofficial C# package. See the Unity section.
-4. **Same-machine buzzer fairness is not representative.** Synthetic clients
-   share one loopback path with no contention.
+4. **No p95/p99 latency was captured from the phones themselves**, only correct
+   behaviour.
+5. **Socket.IO's long-polling fallback is still not represented.** It stays
+   pinned to `transports: ['websocket']` so the comparison is
+   WebSocket-to-WebSocket. Since raw WebSockets were never blocked in testing,
+   that fallback was never needed — but it remains Socket.IO's genuine
+   advantage on networks harsher than any tested here.
 6. **Socket.IO is pinned to `transports: ['websocket']`.** Its HTTP long-polling
    fallback is deliberately disabled so the comparison is WebSocket-to-WebSocket.
    That fallback is a genuine Socket.IO advantage on hostile networks and is
@@ -536,40 +632,47 @@ before it outweighs simplicity and Unity compatibility.**
 
 ## Current status
 
-**Recommendation: raw WebSockets. Not yet a final commitment — see the caveat.**
+**Decision: raw WebSockets.** Evidence is now sufficient.
 
-The evidence that actually separates the two is no longer latency (they are
-indistinguishable) but **Unity**, and that evidence is now in:
+The question that kept this open was whether raw WebSockets would survive real
+internet infrastructure, or whether Socket.IO's HTTP long-polling fallback would
+prove necessary. **It was tested and they survived** — connecting cleanly
+through TLS termination and a real reverse proxy, with tighter latency tails and
+about a third the jitter of Socket.IO.
 
-| | Raw WebSocket | Socket.IO |
-|---|---|---|
-| Unity client | Ships with .NET, **zero dependencies** | **No official C# client exists** |
-| Unity Editor | 29/29 checks pass | not tested |
-| Unity IL2CPP standalone | Builds and runs, no exceptions | not tested |
-| Real devices (A–E) | All pass | — |
-| Ordering / duplicates | 0 faults | 0 faults |
-| Latency, jitter | indistinguishable on loopback | indistinguishable on loopback |
+Combined with everything else measured:
 
-`ARCHITECTURE.md` §1 makes the Host Display a Unity application. A transport
-that needs an **unofficial, community-maintained** C# package to work there —
-with known IL2CPP/AOT stripping risk and Engine.IO version coupling — is a
-standing liability in exactly the component that must not fail during a live
-game. Raw WebSockets need nothing.
+| Evidence | Outcome |
+|---|---|
+| Loopback | Indistinguishable |
+| Real phones on LAN (tests A–E) | Both correct; all rules enforced |
+| **Public internet, TLS + proxy** | **Both connect; WS tighter tails, less jitter** |
+| Ordering / duplicates | 0 faults, both |
+| Reconnect + auto-pause rules | Correct on both |
+| **Unity (the Host Display)** | **WS: 29/29, IL2CPP, zero dependencies. Socket.IO: no official C# client** |
 
-The real counterweight, stated honestly: the raw adapter hand-rolls
-request/response correlation, a cost now paid three times over (server, browser,
-Unity), and **Socket.IO's reconnection and long-polling fallback are genuine
-advantages on hostile networks that these tests deliberately disabled** to keep
-the comparison WebSocket-to-WebSocket. On a LAN that trade is clearly worth it.
+**Unity is what actually decides it.** `ARCHITECTURE.md` §1 makes the Host
+Display a Unity application. Raw WebSockets work there with `ClientWebSocket`
+straight from .NET — no package, no third-party maintenance risk. Socket.IO
+would require an unofficial community C# client with known IL2CPP/AOT stripping
+risk and Engine.IO version coupling, in the one component that must not fail
+during a live game. Nothing in the network measurements offsets that.
 
-### The caveat
+### What this costs us, stated plainly
 
-**Cloud behaviour is still unmeasured**, and that is precisely where Socket.IO's
-fallback would matter most — proxies that break upgrades, mobile data, captive
-portals. `ARCHITECTURE.md` §9 requires the same core to serve both LAN and
-online play.
+- The raw adapter **hand-rolls request/response correlation** — paid three times
+  now (server, browser, Unity). That is the ongoing price.
+- **Socket.IO's fallback and reconnection logic are genuinely better on hostile
+  networks.** Testing deliberately disabled the fallback to keep the comparison
+  fair, and never hit a network that needed it.
 
-So: **adopt raw WebSockets for LAN play now**, keep the transport behind its
-adapter (it already is), and **re-test before committing to an online
-deployment**. If cloud testing shows raw WebSockets failing behind real-world
-proxies, that is the one result that should reopen this decision.
+### What would reopen this
+
+- Raw WebSockets failing on **mobile data, a captive portal, or a specific
+  hosting provider's ingress** — none of which has been tested.
+- A future need to run the Host in **WebGL**, where `ClientWebSocket` does not
+  work at all.
+
+The transport stays behind its adapter (`RealtimeTransport`), so reversing this
+remains a contained change rather than a rewrite. That was the point of building
+the seam.

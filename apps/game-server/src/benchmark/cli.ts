@@ -45,6 +45,8 @@ const options = {
   clients: num('clients', 3),
   pings: num('pings', 30),
   buzzTrials: num('buzz-trials', 6),
+  ...(arg('token', '') === '' ? {} : { accessToken: arg('token', '') }),
+  ...(flag('secure') ? { secure: true } : {}),
   allowMixed: flag('allow-mixed'),
 };
 
@@ -58,7 +60,10 @@ function printReport(report: BenchmarkReport): void {
   console.log('');
   console.log('  Official comparison status');
   line('transport-pure at measurement time', report.official.pure);
-  line('other-transport clients present', `socketio=${report.official.summary.socketio} websocket=${report.official.summary.websocket}`);
+  line(
+    'other-transport clients present',
+    `socketio=${report.official.summary.socketio} websocket=${report.official.summary.websocket}`,
+  );
   if (report.official.overridden) {
     console.log('  ⚠ MIXED TRANSPORT SESSION — run allowed via --allow-mixed.');
     console.log('    This is an interoperability result, NOT an official transport comparison.');

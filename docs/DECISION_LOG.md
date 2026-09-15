@@ -83,3 +83,33 @@ Store board source metadata.
 Development may proceed without its final scoring/win condition.
 
 Its template must remain configurable.
+
+## D-014 — Realtime Transport: Raw WebSockets
+Phase 3's measured comparison is complete. The project uses **raw WebSockets**
+(`ws` on the server, `ClientWebSocket` in Unity, the browser WebSocket API on
+phones), not Socket.IO.
+
+Decided on evidence, not preference:
+- loopback, real phones on LAN, and a real public-internet path with TLS and a
+  reverse proxy all show the two transports behaving correctly and performing
+  comparably (identical 98 ms median RTT over the internet; raw WebSockets
+  showed tighter tails and less jitter),
+- raw WebSockets connected cleanly through a real TLS proxy, so Socket.IO's
+  HTTP long-polling fallback — the one thing that could have decided it the
+  other way — was never needed,
+- **Unity settled it.** The Host Display is Unity (ARCHITECTURE.md §1).
+  `ClientWebSocket` ships with .NET and passed 29/29 checks plus an IL2CPP
+  standalone build with zero dependencies. Socket.IO has no official C# client;
+  it would require an unofficial community package with IL2CPP/AOT stripping
+  risk in the component that must not fail during a live game.
+
+Accepted costs: the raw adapter hand-rolls request/response correlation in every
+client, and Socket.IO's fallback/reconnection remain genuinely better on hostile
+networks that testing never encountered.
+
+This does not remove the `RealtimeTransport` adapter. Transport-specific code
+stays behind it, so the decision is reversible if raw WebSockets later fail on
+mobile data, a captive portal, a specific hosting ingress, or if the Host ever
+needs WebGL (where `ClientWebSocket` does not work).
+
+Full evidence: `docs/NETWORK_BENCHMARK.md`, `docs/UNITY_HOST.md`.

@@ -18,6 +18,10 @@ export interface RunnerOptions {
   readonly clients: number;
   readonly pings: number;
   readonly buzzTrials: number;
+  /** Development access token, when the server requires one (cloud testing). */
+  readonly accessToken?: string;
+  /** Use wss:// and https:// — required behind a cloud TLS ingress. */
+  readonly secure?: boolean;
   /**
    * Allow this run to proceed, and to be reported as "official", even if
    * OTHER clients connected to the same live session (a Host browser, a
@@ -37,7 +41,11 @@ export interface RunnerOptions {
 /** Whether the run's official-purity check passed, and why if not. */
 export interface TransportPurity {
   readonly pure: boolean;
-  readonly summary: { readonly socketio: number; readonly websocket: number; readonly mixed: boolean };
+  readonly summary: {
+    readonly socketio: number;
+    readonly websocket: number;
+    readonly mixed: boolean;
+  };
   /** Non-null when the run proceeded anyway because allowMixed was set. */
   readonly overridden: boolean;
 }
@@ -134,6 +142,8 @@ export async function runBenchmark(options: RunnerOptions): Promise<BenchmarkRep
   const host = createBenchmarkClient(options.transport, {
     host: options.host,
     port: options.port,
+    ...(options.accessToken === undefined ? {} : { accessToken: options.accessToken }),
+    ...(options.secure === undefined ? {} : { secure: options.secure }),
     benchmarkClientId: `host-${randomUUID().slice(0, 8)}`,
     isHost: true,
     label: 'benchmark-host',
@@ -145,6 +155,8 @@ export async function runBenchmark(options: RunnerOptions): Promise<BenchmarkRep
     const client = createBenchmarkClient(options.transport, {
       host: options.host,
       port: options.port,
+      ...(options.accessToken === undefined ? {} : { accessToken: options.accessToken }),
+      ...(options.secure === undefined ? {} : { secure: options.secure }),
       benchmarkClientId: `player-${i + 1}-${randomUUID().slice(0, 8)}`,
       isHost: false,
       label: `player-${i + 1}`,
@@ -210,16 +222,23 @@ export async function runBenchmark(options: RunnerOptions): Promise<BenchmarkRep
   // Duplicate intent — the same intentId submitted twice
   // -------------------------------------------------------------------------
   const sharedIntentId = randomUUID();
-  const first = await probe.submit(BENCHMARK_INTENTS.PING, { pingId: 'dup', clientSentAt: Date.now() }, sharedIntentId);
-  const second = await probe.submit(BENCHMARK_INTENTS.PING, { pingId: 'dup', clientSentAt: Date.now() }, sharedIntentId);
+  const first = await probe.submit(
+    BENCHMARK_INTENTS.PING,
+    { pingId: 'dup', clientSentAt: Date.now() },
+    sharedIntentId,
+  );
+  const second = await probe.submit(
+    BENCHMARK_INTENTS.PING,
+    { pingId: 'dup', clientSentAt: Date.now() },
+    sharedIntentId,
+  );
 
   const duplicateIntent = {
     firstAccepted: first.ok,
     duplicateRejected: !second.ok,
     rejectionCode: second.ok ? null : second.error.code,
     // A client must be able to tell "already done" from "never happened".
-    identifiedOriginalSeq:
-      !second.ok && second.error.details?.['originalSeq'] !== undefined,
+    identifiedOriginalSeq: !second.ok && second.error.details?.['originalSeq'] !== undefined,
   };
 
   // -------------------------------------------------------------------------
@@ -268,8 +287,7 @@ export async function runBenchmark(options: RunnerOptions): Promise<BenchmarkRep
       .reverse()
       .find((e) => e.type === 'BENCHMARK_BUZZ_ACCEPTED');
     const winnerPayload = winnerEvent?.payload as
-      | { benchmarkClientId: string; elapsedSinceOpenMs: number }
-      | undefined;
+      { benchmarkClientId: string; elapsedSinceOpenMs: number } | undefined;
 
     trials.push({
       trial: trial + 1,
@@ -332,6 +350,8 @@ export async function runBenchmark(options: RunnerOptions): Promise<BenchmarkRep
     const rebuilt = createBenchmarkClient(options.transport, {
       host: options.host,
       port: options.port,
+      ...(options.accessToken === undefined ? {} : { accessToken: options.accessToken }),
+      ...(options.secure === undefined ? {} : { secure: options.secure }),
       benchmarkClientId: reconnectTarget.benchmarkClientId,
       isHost: false,
       label: 'reconnected',
@@ -369,7 +389,7 @@ export async function runBenchmark(options: RunnerOptions): Promise<BenchmarkRep
     official,
     rtt: summarizeRtt(rttSamples),
     clockOffsetMs: {
-      medianMs: round2(offsets.length === 0 ? 0 : offsets[Math.floor(offsets.length / 2)] ?? 0),
+      medianMs: round2(offsets.length === 0 ? 0 : (offsets[Math.floor(offsets.length / 2)] ?? 0)),
       maxAbsMs: round2(offsets.length === 0 ? 0 : Math.max(...offsets.map(Math.abs))),
     },
     buzz: { trials, totalAccepted, totalRejected },
@@ -423,7 +443,11 @@ interface BenchmarkStateResponse {
 
 async function fetchState(options: RunnerOptions): Promise<BenchmarkStateResponse | null> {
   try {
-    const res = await fetch(`http://${options.host}:${options.port}/benchmark/state`);
+    const scheme = options.secure === true ? 'https' : 'http';
+    const authority = options.port === 0 ? options.host : `${options.host}:${options.port}`;
+    const query =
+      options.accessToken === undefined ? '' : `?token=${encodeURIComponent(options.accessToken)}`;
+    const res = await fetch(`${scheme}://${authority}/benchmark/state${query}`);
     return (await res.json()) as BenchmarkStateResponse;
   } catch {
     return null;

@@ -328,38 +328,55 @@ cannot predict it.
 
 ## Unity
 
-**Not tested. No Unity Editor is installed on this machine** (checked: no
-`Program Files/Unity`, no Unity Hub, nothing on PATH), and `unity/host/`
-contains only a placeholder README. Unity work is Phase 8.
+**TESTED — raw WebSocket works. Full detail in [UNITY_HOST.md](UNITY_HOST.md).**
 
-Per the Phase 3 instruction, **the transport decision must not be finalised
-while Unity integration risk is unknown.**
+Unity `6000.3.24f1` (Unity 6.3 LTS). The Host project is real, at `unity/host/`.
 
-### Integration approaches to evaluate
+### Raw WebSocket — PASS
 
-**Raw WebSocket**
-- `System.Net.WebSockets.ClientWebSocket` ships with .NET and needs no package.
-- Works in the Editor and on desktop standalone builds.
-- **WebGL cannot use it** — that platform requires a `jslib` bridge to the
-  browser WebSocket API. Community package: `NativeWebSocket`.
-- The request/response correlation this project's adapter hand-rolls would need
-  reimplementing in C#.
+| What | Result |
+|---|---|
+| Editor runtime | **29/29** checks against the live server |
+| Windows standalone, **IL2CPP** | Builds (0 errors/warnings), `.exe` runs with **no exceptions** |
+| Windows standalone, Mono | Builds and runs (kept as a fallback) |
+| Real devices (A–E) | **All pass** — two phones + Unity Host + browser Host on one session |
+| Third-party dependencies | **None** — `System.Net.WebSockets.ClientWebSocket` |
 
-**Socket.IO**
-- No official Unity or C# client from the Socket.IO team.
-- Community options exist (`SocketIOUnity`, `socket.io-client-csharp`), with
-  the usual third-party risks: protocol-version lag, maintenance uncertainty,
-  IL2CPP/AOT stripping issues.
-- Engine.IO's framing must match the server's major version exactly.
+Verified over the wire: protocol version, event deserialisation, sequence
+numbers, millisecond timestamps, authoritative snapshot, connected players,
+timer state, pause/resume, server-selected buzzer winner, clean disconnect,
+reconnect with fresh state, and **no duplicate Host identity**.
 
-### What must be answered before deciding
+The IL2CPP result matters most: AOT/stripping is where a reflection-based JSON
+path most plausibly breaks, and it did not.
 
-1. Does the chosen client connect from the Unity Editor on Windows?
-2. Does it survive an IL2CPP standalone build?
-3. Does reconnection work when the Host display's network drops?
-4. Is the community package maintained against the server's Socket.IO version?
+One caveat carried forward: **`ClientWebSocket` does not work in WebGL.**
+Irrelevant for a desktop Host (`ARCHITECTURE.md` §1); relevant if that ever
+changes.
 
-**Unity stability: OPEN.**
+### Socket.IO — NOT tested, deliberately
+
+There is **no official Unity or C# Socket.IO client**. Only community packages
+(`SocketIOUnity`, `socket.io-client-csharp`) with no vendor backing, known
+IL2CPP/AOT stripping risk, and Engine.IO framing that must track the server's
+major version.
+
+Phase 3's instruction was explicit: do not force this test by adding a
+questionable dependency merely to say both were tested. So it was not added.
+Full assessment (maintenance, licensing, dependency burden, reconnect, protocol
+fit) is in [UNITY_HOST.md](UNITY_HOST.md).
+
+**This asymmetry is itself a result**, and a decisive one: raw WebSockets need
+zero dependencies in Unity, Socket.IO needs an unofficial one.
+
+### Cost that recurred in every client
+
+The raw-WebSocket adapter has no built-in request/response, so each client
+hand-rolls ack correlation. That cost has now been paid **three times** — server
+adapter, browser client, Unity client. Socket.IO provides it free.
+
+Real and worth weighing; it did not turn out to be decisive against a transport
+that needs no Unity dependency at all.
 
 ---
 
@@ -464,14 +481,15 @@ Follow the phone procedure above and enter what you observe.
 | Behaviour on mobile data | | |
 | Proxy / upgrade problems | | |
 
-## Results — Unity (OPEN)
+## Results — Unity (COMPLETE)
 
 | Check | Socket.IO | Raw WebSocket |
 |---|---|---|
-| Connects from Editor | | |
-| Survives IL2CPP build | | |
-| Reconnect works | | |
-| Package maintained | | |
+| Connects from Editor | not tested (no official C# client) | **PASS** — 29/29 checks |
+| Survives IL2CPP build | not tested | **PASS** — 0 errors, no exceptions |
+| Reconnect works | not tested | **PASS** — same identity, no duplicate |
+| Real-device A-E | not tested | **PASS** — 2 phones + Unity + browser Host |
+| Package maintained | n/a — would need an unofficial community package | **n/a — no package needed** |
 
 ---
 
@@ -501,13 +519,14 @@ before it outweighs simplicity and Unity compatibility.**
 
 ## Known limitations of the current results
 
-1. **Loopback only.** No physical network. Sub-millisecond RTT is an artefact.
-2. **Synthetic clients are Node, not phones.** No radio, no power management,
-   no mobile browser quirks.
-3. **No cloud measurements.** None invented.
-4. **No Unity measurements.** No Editor on this machine.
-5. **Same-machine buzzer fairness is not representative.** All clients share one
-   loopback path with no contention.
+1. **Latency numbers are loopback only.** Sub-millisecond RTT is an artefact.
+   Real-device testing confirmed *correct behaviour* on LAN, but no p95/p99
+   latency figures were captured from the phones.
+2. **No cloud measurements.** None invented.
+3. **Socket.IO was not tested in Unity** — deliberately, rather than add an
+   unofficial C# package. See the Unity section.
+4. **Same-machine buzzer fairness is not representative.** Synthetic clients
+   share one loopback path with no contention.
 6. **Socket.IO is pinned to `transports: ['websocket']`.** Its HTTP long-polling
    fallback is deliberately disabled so the comparison is WebSocket-to-WebSocket.
    That fallback is a genuine Socket.IO advantage on hostile networks and is
@@ -517,8 +536,40 @@ before it outweighs simplicity and Unity compatibility.**
 
 ## Current status
 
-**The transport decision is OPEN.**
+**Recommendation: raw WebSockets. Not yet a final commitment — see the caveat.**
 
-Both adapters are implemented, tested and behave identically on local
-measurements. What is missing is the evidence that would actually differentiate
-them: real phones on real Wi-Fi, cloud behaviour, and Unity integration.
+The evidence that actually separates the two is no longer latency (they are
+indistinguishable) but **Unity**, and that evidence is now in:
+
+| | Raw WebSocket | Socket.IO |
+|---|---|---|
+| Unity client | Ships with .NET, **zero dependencies** | **No official C# client exists** |
+| Unity Editor | 29/29 checks pass | not tested |
+| Unity IL2CPP standalone | Builds and runs, no exceptions | not tested |
+| Real devices (A–E) | All pass | — |
+| Ordering / duplicates | 0 faults | 0 faults |
+| Latency, jitter | indistinguishable on loopback | indistinguishable on loopback |
+
+`ARCHITECTURE.md` §1 makes the Host Display a Unity application. A transport
+that needs an **unofficial, community-maintained** C# package to work there —
+with known IL2CPP/AOT stripping risk and Engine.IO version coupling — is a
+standing liability in exactly the component that must not fail during a live
+game. Raw WebSockets need nothing.
+
+The real counterweight, stated honestly: the raw adapter hand-rolls
+request/response correlation, a cost now paid three times over (server, browser,
+Unity), and **Socket.IO's reconnection and long-polling fallback are genuine
+advantages on hostile networks that these tests deliberately disabled** to keep
+the comparison WebSocket-to-WebSocket. On a LAN that trade is clearly worth it.
+
+### The caveat
+
+**Cloud behaviour is still unmeasured**, and that is precisely where Socket.IO's
+fallback would matter most — proxies that break upgrades, mobile data, captive
+portals. `ARCHITECTURE.md` §9 requires the same core to serve both LAN and
+online play.
+
+So: **adopt raw WebSockets for LAN play now**, keep the transport behind its
+adapter (it already is), and **re-test before committing to an online
+deployment**. If cloud testing shows raw WebSockets failing behind real-world
+proxies, that is the one result that should reopen this decision.

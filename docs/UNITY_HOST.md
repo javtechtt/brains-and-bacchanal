@@ -3,13 +3,12 @@
 The Unity Host Display, and the Phase 3 test that proves Unity can act as a
 client of the authoritative game server.
 
-> **Status: raw WebSocket compatibility is PROVEN in Editor AND IL2CPP standalone.**
+> **Status: COMPLETE. Unity raw WebSocket compatibility is proven.**
 >
-> The Editor runtime test passes **27/27 checks against the live benchmark
-> server**, and both Mono and **IL2CPP** Windows standalone `.exe` builds
-> succeed and run cleanly with zero exceptions. The **real-device phone tests
-> (A-E) have not yet been run**. Until they are, the Phase 3 transport decision
-> stays **OPEN**.
+> The Editor runtime test passes **29/29 checks against the live benchmark
+> server**; both Mono and **IL2CPP** Windows standalone `.exe` builds succeed and
+> run cleanly with zero exceptions; and **real-device tests A–E all pass** with
+> two physical phones, the Unity Host and the browser Host on one session.
 
 ---
 
@@ -362,11 +361,36 @@ state after reconnect, and **no duplicate Unity identity created**.
 
 Blocked on the missing build module.
 
-### Real-device tests (A–E) — NOT COMPLETED
+### Real-device tests (A–E) — ALL PASS
 
-Tests A (players), B (timer), C (phone lock / auto-pause), D (buzzer) and
-E (Unity reconnect) require the Editor or a standalone build running against the
-benchmark server alongside real phones.
+Run against the IL2CPP standalone `.exe` with **two physical phones**, the Unity
+Host and the browser Host all on one session:
+
+| Test | Result |
+|---|---|
+| **A — Players** | PASS. Unity listed both phones; disconnect/reconnect restored the **same identity**, no duplicate |
+| **B — Timer** | PASS. Unity and both phones counted down together; pause froze all; resume continued from the frozen value |
+| **C — Phone lock** | PASS. Locking a phone auto-paused the session, Unity showed `PAUSED — player disconnected (…)`, unlocking **did not** resume, only Host Resume continued play |
+| **D — Buzzer** | PASS. Both phones buzzed; the server picked one winner and Unity displayed it |
+| **E — Unity reconnect** | PASS. Disconnect/reconnect restored current authoritative state |
+
+Final observed session state, all five clients on one shared session:
+
+```text
+seq: 22   phase: ACTIVE_PLAY   paused: False
+transports: {socketio: 0, websocket: 4, mixed: False}
+  phone-6rr3    | websocket | online | player
+  phone-3l7f    | websocket | online | player
+  unity-host    | websocket | online | HOST
+  browser-host  | websocket | online | HOST
+```
+
+Note `seq: 22` after a full A–E run: sequence numbers now track **real state
+changes only**, not polling (see bug 2b).
+
+Three bugs were found by these tests and fixed — the frozen timer, the snapshot
+sequence-number inflation, and the ungrouped transport radios. All are recorded
+below.
 
 ## Bugs found by running it (not by compiling it)
 
@@ -447,6 +471,19 @@ polling, where the old behaviour had reached 539.
 Four server tests now enforce this: a read consumes no sequence number, emits no
 event, returns the snapshot in the ack, and reports the latest *real* sequence
 number.
+
+### 2c. Transport radio buttons were not one group (web)
+
+Both `socketio` and `websocket` rendered as selected and clicking one never
+cleared the other, so **the transport could not be changed at all** — on the
+Host page *or* the player page, meaning phones were affected too.
+
+Cause: the radios had no `name` attribute. Without a shared name the browser
+treats each radio as its own single-member group, so each tracks `checked`
+independently. Fixed with a shared `name="bb-transport"` (plus `value`).
+
+Verified in a real headless Chrome rather than by reading the bundle:
+`sameGroup: true, exactlyOneChecked: true`.
 
 ### 3. Unity main-thread deadlock
 

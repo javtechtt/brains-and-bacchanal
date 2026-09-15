@@ -8,16 +8,24 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "benchmark:server": "node dist/benchmark/index.js",
+    "benchmark:server:dev": "tsx src/benchmark/index.ts",
+    "benchmark": "node dist/benchmark/cli.js",
+    "benchmark:dev": "tsx src/benchmark/cli.ts"
   },
   "dependencies": {
     "@bb/game-rules": "workspace:*",
     "@bb/protocol": "workspace:*",
-    "pino": "^9.6.0"
+    "pino": "^9.6.0",
+    "socket.io": "^4.8.3",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "@types/ws": "^8.18.1",
     "pino-pretty": "^13.0.0",
+    "socket.io-client": "^4.8.3",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

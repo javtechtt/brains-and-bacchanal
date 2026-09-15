@@ -22,4 +22,6 @@ export * from './envelope.js';
 export * from './lifecycle.js';
 export * from './models.js';
 export * from './snapshot.js';
+export * from './transport.js';
+export * from './benchmark.js';
 export * from './health.js';

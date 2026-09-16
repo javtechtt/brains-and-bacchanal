@@ -659,6 +659,36 @@ describe('auto-pause on an active player disconnect', () => {
     expect(h.room.player(h.p2)?.connection).toBe('disconnected');
   });
 
+  it('pauses only for the player actually marked active, not any teammate', () => {
+    const h = makeRoom();
+    startChallenge(h);
+
+    // p1 is active, p2 is not. Both are in the game, both on teams, both
+    // connected — the only difference is the active set.
+    expect(h.room.game.isActivePlayer(h.p1)).toBe(true);
+    expect(h.room.game.isActivePlayer(h.p2)).toBe(false);
+
+    // Dropping the non-active one changes nothing about play.
+    h.room.onDisconnect(PHONE_2);
+    expect(h.room.game.paused).toBe(false);
+
+    // Dropping the active one stops it.
+    h.room.onDisconnect(PHONE_1);
+    expect(h.room.game.paused).toBe(true);
+    expect(h.room.game.sessionView()?.pause?.pausedByPlayerId).toBe(h.p1);
+  });
+
+  it('stops pausing for a player once they are no longer active', () => {
+    const h = makeRoom();
+    startChallenge(h);
+    // Control moves from p1 to p2 — the situation every later round creates
+    // when a turn passes.
+    h.host(GAME_INTENTS.HOST_SET_ACTIVE_PLAYERS, { playerIds: [h.p2] });
+
+    h.room.onDisconnect(PHONE_1);
+    expect(h.room.game.paused).toBe(false);
+  });
+
   it('does NOT pause in the lobby, where there is no gameplay', () => {
     const h = makeRoom();
     const events = h.room.onDisconnect(PHONE_1);

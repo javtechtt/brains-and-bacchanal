@@ -250,11 +250,17 @@ namespace BrainsAndBacchanal
 
             GUILayout.BeginHorizontal();
             GUI.enabled = !_busy && !session.paused && !string.IsNullOrEmpty(_selectedPlayerId);
-            if (GUILayout.Button("Set selected ACTIVE", GUILayout.Width(180)))
+
+            // Names the player rather than saying "selected". Marking someone
+            // active is what makes their phone dropping pause the game (D-011),
+            // and a button that does not say who it acts on is how the wrong
+            // person ends up active.
+            var activeLabel = string.IsNullOrEmpty(_selectedPlayerId)
+                ? "Set ACTIVE (pick a player)"
+                : $"Set ACTIVE: {NameOf(_selectedPlayerId)}";
+
+            if (GUILayout.Button(activeLabel, GUILayout.Width(200)))
             {
-                // Marking a player active is what makes their phone dropping
-                // pause the game (D-011). Nothing infers it from who is
-                // connected.
                 _ = SubmitGameIntentAsync(
                     GameIntents.SetActivePlayers,
                     "{\"playerIds\":[" + Quote(_selectedPlayerId) + "]}");

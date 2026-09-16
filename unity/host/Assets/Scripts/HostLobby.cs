@@ -492,7 +492,7 @@ namespace BrainsAndBacchanal
                 GUILayout.BeginHorizontal();
                 DrawRoomPanel(snapshot, game);
                 GUILayout.Space(24);
-                DrawPlayersPanel(snapshot);
+                DrawPlayersPanel(snapshot, game);
                 GUILayout.Space(24);
                 DrawEnginePanel(snapshot, game);
                 GUILayout.EndHorizontal();
@@ -602,12 +602,18 @@ namespace BrainsAndBacchanal
             GUILayout.EndVertical();
         }
 
-        private void DrawPlayersPanel(LobbySnapshot snapshot)
+        private void DrawPlayersPanel(LobbySnapshot snapshot, HostGameSnapshot game)
         {
             GUILayout.BeginVertical();
 
             var players = snapshot.players ?? Array.Empty<LobbyPlayer>();
             GUILayout.Label($"PLAYERS ({players.Length})", HeaderStyle);
+
+            // Whose disconnect will stop the game (D-011/D-021). Materialised
+            // once from the captured snapshot so the Layout and Repaint passes
+            // of this OnGUI call agree — the same discipline as everything else
+            // drawn from mutable state here.
+            var activeIds = game?.game?.challenge?.activePlayerIds ?? Array.Empty<string>();
 
             if (players.Length == 0)
             {
@@ -634,6 +640,20 @@ namespace BrainsAndBacchanal
                 GUI.color = previous;
 
                 GUILayout.Label(TeamIds.Label(player.teamId), GUILayout.Width(100));
+
+                // ACTIVE is the single most consequential fact about a player
+                // during a game: theirs is the disconnect that stops play
+                // (D-011/D-021). It was missing from this list, so the Host
+                // could mark someone active, forget, and then be surprised when
+                // locking "the other phone" paused the game. Always drawn, so
+                // the control count does not change between passes.
+                GUI.color = Array.IndexOf(activeIds, player.playerId) >= 0
+                    ? Color.yellow
+                    : new Color(1f, 1f, 1f, 0.25f);
+                GUILayout.Label(
+                    Array.IndexOf(activeIds, player.playerId) >= 0 ? "ACTIVE" : "—",
+                    GUILayout.Width(60));
+                GUI.color = previous;
 
                 GUILayout.EndHorizontal();
             }

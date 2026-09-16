@@ -2,8 +2,12 @@
 Drive the real player lobby in a real browser against the real server.
 
 Phase 3's ungrouped-radio bug proved that a 200 response and a clean build say
-nothing about whether the page works. This joins a room, checks the team appears,
-reloads to prove reconnect, and leaves to prove the credential dies.
+nothing about whether the page works.
+
+Covers: joining, a live team update arriving without a reload, refresh-reconnect
+(§31B), close/reopen-reconnect (§31C), and intentional leave killing the
+credential (§31D) — asserting against the SERVER's view at each step, not just
+what the page happens to render.
 """
 import asyncio, json, sys
 import websockets
@@ -112,6 +116,54 @@ async def main():
         check("server still has exactly one player", len(players) == 1,
               f"{len(players)} players")
         check("server kept the team", players[0]["teamId"] == "TEAM_A", str(players[0]))
+
+        # ---- Close the tab entirely, then reopen (spec §31C) ----
+        #
+        # Genuinely different from a reload: closing the page destroys the
+        # WebSocket and every scrap of in-memory JS state, so the reopened page
+        # must rebuild identity from localStorage alone. A reload can mask a
+        # dependency on surviving memory; this cannot.
+        await page.close()
+        await asyncio.sleep(1.0)   # let the server observe the socket drop
+
+        snap = await host_submit(ws, "REQUEST_LOBBY_SNAPSHOT", {}, room_id, 31)
+        away = snap["snapshot"]["players"]
+        check("closing the tab does not delete the player",
+              len(away) == 1, str(away))
+        check("closed tab shows as disconnected",
+              away and away[0]["connection"] == "disconnected", str(away))
+        check("team survives the tab being closed",
+              away and away[0]["teamId"] == "TEAM_A", str(away))
+
+        reopened = await ctx.new_page()
+        reopened_errors = []
+        reopened.on("pageerror", lambda e: reopened_errors.append(str(e)))
+        reopened.on("console",
+                    lambda m: reopened_errors.append(m.text) if m.type == "error" else None)
+        await reopened.goto(f"{WEB}/join/{code}", wait_until="networkidle")
+        await reopened.wait_for_timeout(1800)
+
+        body = await reopened.inner_text("body")
+        check("reopened tab restores the player", "Javal" in body, body[:250])
+        check("reopened tab keeps the team", "TEAM A" in body.upper(), body[:250])
+        check("reopened tab does not ask for a name",
+              await reopened.locator("#displayName").count() == 0, "name field reappeared")
+
+        restored = await reopened.evaluate(
+            f"() => JSON.parse(localStorage.getItem('bb.identity.{code}'))")
+        check("reopened tab has the same player id",
+              restored["playerId"] == player_id,
+              f"{player_id} -> {restored['playerId']}")
+
+        snap = await host_submit(ws, "REQUEST_LOBBY_SNAPSHOT", {}, room_id, 32)
+        back = snap["snapshot"]["players"]
+        check("still exactly one player after reopen — no duplicate",
+              len(back) == 1, str(back))
+        check("reopened player is connected again",
+              back and back[0]["connection"] == "connected", str(back))
+
+        errors.extend(reopened_errors)
+        page = reopened
 
         # ---- Leave: credential must die ----
         page.on("dialog", lambda d: asyncio.ensure_future(d.accept()))

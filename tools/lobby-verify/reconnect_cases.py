@@ -298,6 +298,105 @@ async def case_three_team_guard():
     await host.close()
 
 
+async def case_displaced_host_cannot_act():
+    """
+    A displaced Host connection must lose Host authority.
+
+    The scenario that matters: the operator opens the Host somewhere else (or
+    Unity restarts and reconnects) while the old window is still on screen.
+    If the old connection kept its authority, two windows could both drive the
+    game and whichever was clicked last would win — with no indication to
+    either which one was authoritative.
+    """
+    host, room = await new_room()
+    player, info = await join(room, "Javal")
+
+    second = await Client().connect()
+    second.room_id = room["roomId"]
+    ack = await second.submit("RECONNECT_HOST", {"hostToken": room["hostToken"]})
+    check("H: second Host connection accepted", ack.get("ok") is True, str(ack)[:200])
+
+    await host.drain(1.0)
+    check("H: displaced Host was told why",
+          host.saw("CONNECTION_SUPERSEDED"),
+          str([e.get("type") for e in host.events]))
+
+    # The old Host socket is closed by the server, so the attempt has to come
+    # from a fresh connection that never proved Host authority at all.
+    third = await Client().connect()
+    third.room_id = room["roomId"]
+    ack = await third.submit("HOST_ASSIGN_PLAYER_TEAM",
+                             {"playerId": info["playerId"], "teamId": "TEAM_A"})
+    check("H: a connection without the credential cannot act as Host",
+          ack.get("ok") is False, str(ack)[:200])
+    check("H: rejection is UNAUTHORIZED_ACTOR",
+          ack.get("error", {}).get("code") == "UNAUTHORIZED_ACTOR", str(ack)[:200])
+
+    # The genuine new Host still works.
+    ack = await second.submit("HOST_ASSIGN_PLAYER_TEAM",
+                              {"playerId": info["playerId"], "teamId": "TEAM_A"})
+    check("H: the current Host can still act", ack.get("ok") is True, str(ack)[:200])
+
+    for client in (third, second, player):
+        await client.close()
+
+
+async def case_three_team_full_flow():
+    """
+    A complete three-team game shape (spec §33): three players, one per team,
+    locked, then reconnect after the lock.
+
+    Distinct from case_three_team_guard, which only proves the 3->2 refusal.
+    This proves Team C is a real, first-class team — assignable, lockable, and
+    preserved across a reconnect — rather than merely a value the mode accepts.
+    """
+    host, room = await new_room()
+
+    ack = await host.submit("HOST_SET_TEAM_MODE", {"teamMode": 3})
+    check("3: team mode set to 3", ack.get("ok") is True, str(ack)[:200])
+
+    snap = await host.submit("REQUEST_LOBBY_SNAPSHOT")
+    check("3: three teams exposed",
+          len(snap["snapshot"]["teams"]) == 3, str(snap["snapshot"]["teams"]))
+
+    a, a_info = await join(room, "Javal")
+    b, b_info = await join(room, "Andrea")
+    c, c_info = await join(room, "Third")
+
+    for info, team in ((a_info, "TEAM_A"), (b_info, "TEAM_B"), (c_info, "TEAM_C")):
+        ack = await host.submit("HOST_ASSIGN_PLAYER_TEAM",
+                                {"playerId": info["playerId"], "teamId": team})
+        check(f"3: assigned a player to {team}", ack.get("ok") is True, str(ack)[:200])
+
+    ack = await host.submit("HOST_LOCK_TEAMS")
+    check("3: lock succeeds with all three teams populated",
+          ack.get("ok") is True, str(ack)[:200])
+
+    # Reconnect the Team C player specifically: Team C is the one that only
+    # exists in three-team mode, so it is where a mode-dependent bug would hide.
+    await c.close()
+    await asyncio.sleep(0.3)
+    returning = await Client().connect()
+    returning.room_id = room["roomId"]
+    ack = await returning.submit("RECONNECT_PLAYER", {
+        "playerId": c_info["playerId"], "reconnectToken": c_info["reconnectToken"]})
+    check("3: Team C player reconnects after lock", ack.get("ok") is True, str(ack)[:200])
+
+    snap = await host.submit("REQUEST_LOBBY_SNAPSHOT")
+    players = snap["snapshot"]["players"]
+    restored = next((p for p in players if p["playerId"] == c_info["playerId"]), None)
+    check("3: Team C membership restored",
+          restored is not None and restored["teamId"] == "TEAM_C", str(restored))
+    check("3: still exactly three players", len(players) == 3, str(len(players)))
+    check("3: room still locked after reconnect",
+          snap["snapshot"]["room"]["teamsLocked"] is True, str(snap["snapshot"]["room"]))
+    check("3: still in three-team mode",
+          snap["snapshot"]["room"]["teamMode"] == 3, str(snap["snapshot"]["room"]))
+
+    for client in (a, b, returning, host):
+        await client.close()
+
+
 async def case_capacity_and_lock():
     """Locking needs every team populated; uneven teams are fine."""
     host, room = await new_room()
@@ -348,7 +447,9 @@ async def case_capacity_and_lock():
 async def main():
     for case in (case_a_network_interruption, case_d_intentional_leave,
                  case_room_close, case_e_stale_connection, case_late_close,
-                 case_host_removal, case_three_team_guard, case_capacity_and_lock):
+                 case_host_removal, case_displaced_host_cannot_act,
+                 case_three_team_guard, case_three_team_full_flow,
+                 case_capacity_and_lock):
         print(f"\n--- {case.__name__} ---")
         await case()
 

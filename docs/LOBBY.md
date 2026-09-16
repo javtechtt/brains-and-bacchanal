@@ -340,6 +340,59 @@ game unjoinable. Authority is proved *after* connecting, by credential.
 
 ---
 
+## Real-device results
+
+**The Phase 4 lobby was tested on real hardware and PASSED.**
+
+Windows IL2CPP standalone Unity Host + two physical phones on the LAN, against
+the compiled game server and the production web build.
+
+| Step | Result |
+|---|---|
+| Unity Windows Host launched | **PASS** |
+| Create Room | **PASS** |
+| Room code displayed | **PASS** |
+| **QR scanned with a real phone camera** | **PASS** |
+| QR opened the correct `/join/<CODE>` | **PASS** |
+| Phone 1 joined | **PASS** |
+| Phone 2 joined | **PASS** |
+| Both players listed in Unity | **PASS** |
+| Host assigned Phone 1 → Team A | **PASS** |
+| Host assigned Phone 2 → Team B | **PASS** |
+| **Both phones updated live** with their team | **PASS** |
+| Lock Teams | **PASS** |
+| Phone screen locked, then unlocked | **PASS** — reconnected, **same identity**, **same team**, **no duplicate** |
+| Other phone's browser refreshed | **PASS** — restored automatically, no name prompt |
+
+This is the criterion the phase hinged on: §30 says a QR is not proven by
+generating an image, and §29 says Phase 4 is not complete without the physical
+run. Both are now satisfied on real devices.
+
+### Covered without another physical run
+
+The remaining exit criteria were proven over **real WebSockets against the
+running compiled server**, because they exercise the same server code paths the
+phones just exercised, and repeating them by hand would add no information:
+
+| Criterion | Where proven |
+|---|---|
+| §31C browser close/reopen | `tools/lobby-verify/browser_lobby.py` (real Chromium) |
+| §31D leave, old credential refused | browser harness + `reconnect_cases.py` |
+| §31E stale connection replacement | `reconnect_cases.py` |
+| §33 three-team assign → lock → reconnect | `reconnect_cases.py` |
+| 3 → 2 refused while Team C holds players | `reconnect_cases.py` |
+| Host removal + removed player cannot return | `reconnect_cases.py` |
+| Room closure; joins/reconnects refused after | `reconnect_cases.py` |
+| Unity Host reconnect to the SAME room | `HeadlessLobbyCheck` (real Unity client) + `network.test.ts` |
+| Displaced Host loses authority | `reconnect_cases.py` |
+| Team lock surviving reconnect | `reconnect_cases.py` (2-team and 3-team) |
+| Host authority / forged `isHost` | `HeadlessLobbyCheck`, `network.test.ts`, unit tests |
+| Room capacity | unit tests (`room.test.ts`) — same code path, smaller constant |
+
+Physical three-team play with three phones has **not** been run by hand. The
+three-team flow is proven over real sockets end-to-end; what a third phone would
+additionally prove is only that a third handset behaves like the first two.
+
 ## LAN test procedure
 
 1. Start the game server: `pnpm --filter @bb/game-server dev`

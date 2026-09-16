@@ -60,10 +60,6 @@ unity/host/Temp/
 unity/host/Obj/
 unity/host/Build/
 unity/host/Builds/
-
-# A stray full copy of the repo, created by pointing Unity Hub's "Add project"
-# at the wrong folder. Not a submodule and not wanted in history.
-unity/host/brains-and-bacchanal/
 unity/host/Logs/
 unity/host/UserSettings/
 unity/host/MemoryCaptures/

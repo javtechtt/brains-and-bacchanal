@@ -241,15 +241,27 @@ export class SharedSystems {
       }
     }
 
+    // THE RESOLVED CLASH STAYS VISIBLE. Every exit path below used to call
+    // `this.clash.clear()`, which wiped `view()` back to null the instant this
+    // method returned — so a client polling REQUEST_GAME_SNAPSHOT a moment
+    // later, including the Host, saw no Clash at all: not the winner, not
+    // PART DAT FIGHT, not the explanation. The one-shot event payload was the
+    // only place the result ever reached a client, which a reconnecting phone
+    // or a slow-polling Unity panel would simply miss.
+    //
+    // `ClashEngine.open()` already resets every field for the NEXT Clash and
+    // refuses to open while `active` (clashId set and not yet resolved), so
+    // leaving a resolved Clash in place is enough — the next played card
+    // replaces it, and `endChallenge()` clears it when the challenge itself
+    // ends. Nothing here needs its own clear.
+
     // Part Dat Fight, or nothing played: no effect resolves at all.
     if (result.outcome === 'part_dat_fight' || result.winningTeamId === null) {
-      this.clash.clear();
       return ok({ result, effect: null, immunityTriggered: false, immunityTeamId: null });
     }
 
     const winner = entries.find((entry) => entry.teamId === result.winningTeamId);
     if (winner === undefined) {
-      this.clash.clear();
       return ok({ result, effect: null, immunityTriggered: false, immunityTeamId: null });
     }
 
@@ -264,7 +276,6 @@ export class SharedSystems {
         // being consumed. It is still barred for this challenge, because the
         // team did play it.
         this.cards.returnToHand(winner.cardInstanceId);
-        this.clash.clear();
         return ok({
           result,
           effect: null,
@@ -284,7 +295,6 @@ export class SharedSystems {
     });
     this.cards.consume(winner.cardInstanceId);
 
-    this.clash.clear();
     return ok({ result, effect, immunityTriggered: false, immunityTeamId: null });
   }
 

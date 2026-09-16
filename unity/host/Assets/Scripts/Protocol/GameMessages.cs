@@ -253,4 +253,46 @@ namespace BrainsAndBacchanal.Protocol
 
         public bool GameRunning => game != null && !string.IsNullOrEmpty(game.gameId);
     }
+
+    /// <summary>
+    /// A player's game snapshot — mirrors PlayerGameSnapshot in
+    /// packages/protocol/src/game.ts.
+    ///
+    /// Used only by HeadlessSharedSystemsCheck today: the Host scene has never
+    /// needed to deserialise a PLAYER's view of its own state, because the Host
+    /// is never a player. It exists here so the check can read exactly the JSON
+    /// a phone receives, through the same DTO shape a phone would use, rather
+    /// than reaching for HostGameSnapshot and hoping the fields line up.
+    ///
+    /// CONTENT SAFETY: no field here can carry the BB ledger, the Host token,
+    /// another player's reconnect credential, or — since Phase 6 —
+    /// PlayerSharedSystemsView's carrying an opponent's card, a hidden Market
+    /// purchase or an unrevealed Clash response. There is nowhere to put them.
+    /// </summary>
+    [Serializable]
+    public class PlayerGameSnapshot
+    {
+        public int protocolVersion;
+        public long seq;
+        public long takenAt;
+        public LobbyRoom room;
+        public LobbyPlayer[] players;
+        public GameTeamView[] teams;
+        public int teamMode;
+        public GameSessionView game;
+
+        public bool isHost;
+        public string you;
+        public string yourTeamId;
+        public bool youAreActive;
+        public bool yourTurn;
+
+        /// <summary>
+        /// Phase 6 shared systems, scoped to THIS PLAYER'S TEAM. Null before the
+        /// game starts, or for a player with no team.
+        /// </summary>
+        public PlayerSharedSystemsView shared;
+
+        public bool GameRunning => game != null && !string.IsNullOrEmpty(game.gameId);
+    }
 }

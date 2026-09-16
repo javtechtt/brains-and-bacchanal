@@ -81,6 +81,117 @@ describe('an uncontested card resolves', () => {
   });
 });
 
+describe('a resolved Clash stays visible until the next one opens', () => {
+  // Regression: resolveClash() used to call ClashEngine.clear() on every exit
+  // path, which reset #clashId to null and made view() return null the instant
+  // resolution finished — before any client had a chance to see the winner, the
+  // explanation or a Part Dat Fight. The one-shot CLASH_RESOLVED/PART_DAT_FIGHT
+  // event was the ONLY place the result ever reached a client; anyone who
+  // polled REQUEST_GAME_SNAPSHOT a moment later — a reconnecting phone, a slow
+  // UI refresh, the Unity dev panel — saw no Clash at all. Found by
+  // HeadlessSharedSystemsCheck.cs reading real snapshot JSON after a real
+  // Clash, which no existing test exercised: every prior test asserted
+  // resolveClash()'s RETURN VALUE directly, never round-tripped the result
+  // through hostView()/playerView() afterward the way a real client would.
+  it('keeps the winner and explanation in hostView() after resolution', () => {
+    const seed = seedWhere(
+      (h) => h.TEAM_A!.includes('DOUBLE_IT') && h.TEAM_B!.includes('DOH_KNOW'),
+    );
+    const { systems, clock } = setup(seed);
+    systems.cards.deal(TEAMS);
+    systems.openCardWindow(CHALLENGE, 'ROUND2_PHYSICAL');
+
+    const double = systems.cards.handOf(TEAM_A).find((c) => c.cardType === 'DOUBLE_IT')!;
+    systems.playCard({
+      teamId: TEAM_A,
+      cardInstanceId: double.cardInstanceId,
+      challengeId: CHALLENGE,
+      paused: false,
+      allTeamIds: TEAMS,
+    });
+    clock.advance(3_001);
+    const resolved = systems.resolveClash();
+    expect(resolved.ok).toBe(true);
+
+    // The whole point: read it back through the SAME view a client receives,
+    // not through resolveClash()'s own return value.
+    const clash = systems.hostView().clash;
+    expect(clash).not.toBeNull();
+    expect(clash?.resolved).toBe(true);
+    expect(clash?.result?.outcome).toBe('uncontested');
+    expect(clash?.result?.winningCardType).toBe('DOUBLE_IT');
+    expect(clash?.result?.explanation.length).toBeGreaterThan(0);
+  });
+
+  it('keeps a Part Dat Fight visible in playerView() after resolution', () => {
+    const seed = seedWhere(
+      (h) => h.TEAM_A!.includes('DOUBLE_IT') && h.TEAM_B!.includes('DOUBLE_IT'),
+    );
+    const { systems, clock } = setup(seed);
+    systems.cards.deal(TEAMS);
+    systems.openCardWindow(CHALLENGE, 'THINK_FAST');
+
+    const a = systems.cards.handOf(TEAM_A).find((c) => c.cardType === 'DOUBLE_IT')!;
+    const b = systems.cards.handOf(TEAM_B).find((c) => c.cardType === 'DOUBLE_IT')!;
+    systems.playCard({
+      teamId: TEAM_A,
+      cardInstanceId: a.cardInstanceId,
+      challengeId: CHALLENGE,
+      paused: false,
+      allTeamIds: TEAMS,
+    });
+    systems.respondToClash({ teamId: TEAM_B, cardInstanceId: b.cardInstanceId, paused: false });
+    clock.advance(3_001);
+    systems.resolveClash();
+
+    const clash = systems.playerView(TEAM_A, false).clash;
+    expect(clash).not.toBeNull();
+    expect(clash?.resolved).toBe(true);
+    expect(clash?.result?.outcome).toBe('part_dat_fight');
+  });
+
+  it('replaces the previous resolved Clash when the next one opens', () => {
+    // The resolved Clash is not cleared explicitly — the next open() replaces
+    // it, and this proves that actually happens rather than leaving stale data.
+    const seed = seedWhere(
+      (h) =>
+        h.TEAM_A!.filter((c) => c === 'DOUBLE_IT' || c === 'FORGIVE_MEH').length === 2 &&
+        h.TEAM_B!.includes('STEUPS') === false,
+    );
+    const { systems, clock } = setup(seed);
+    systems.cards.deal(TEAMS);
+    systems.openCardWindow(CHALLENGE, 'THINK_FAST');
+
+    const first = systems.cards.eligibleCardsFor(TEAM_A, false)[0]!;
+    systems.playCard({
+      teamId: TEAM_A,
+      cardInstanceId: first.cardInstanceId,
+      challengeId: CHALLENGE,
+      paused: false,
+      allTeamIds: TEAMS,
+    });
+    clock.advance(3_001);
+    systems.resolveClash();
+    const firstClashId = systems.hostView().clash?.clashId;
+
+    systems.endChallenge();
+    systems.openCardWindow(asChallengeId('challenge-2'), 'THINK_FAST');
+    const second = systems.cards.eligibleCardsFor(TEAM_A, false)[0];
+    if (second === undefined) return; // hand exhausted this run, nothing left to prove
+
+    systems.playCard({
+      teamId: TEAM_A,
+      cardInstanceId: second.cardInstanceId,
+      challengeId: asChallengeId('challenge-2'),
+      paused: false,
+      allTeamIds: TEAMS,
+    });
+
+    const newClashId = systems.hostView().clash?.clashId;
+    expect(newClashId).not.toBe(firstClashId);
+  });
+});
+
 describe('the multiplier is shared across every source', () => {
   it('spends the one Double budget when DOUBLE_IT resolves', () => {
     // §3 / §10 — multipliers never stack, whichever system supplies them.

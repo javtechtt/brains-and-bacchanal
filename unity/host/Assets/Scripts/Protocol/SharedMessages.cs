@@ -256,6 +256,26 @@ namespace BrainsAndBacchanal.Protocol
         public int removedImpossibleCount;
     }
 
+    /// <summary>
+    /// A lasting effect one team has placed on another — Price Gone Up! or
+    /// Hands Tied. Distinct from a held ADVANTAGE, which benefits its holder;
+    /// this is a burden.
+    /// </summary>
+    [Serializable]
+    public class HeldEffectView
+    {
+        public string effectId;
+
+        /// <summary>PRICE_GONE_UP or HANDS_TIED.</summary>
+        public string type;
+
+        public string targetTeamId;
+        public string placedByTeamId;
+        public long placedAt;
+        public bool consumed;
+        public long consumedAt;
+    }
+
     /// <summary>One drawn Maco Mail card and what it did.</summary>
     [Serializable]
     public class MacoDrawView
@@ -344,5 +364,104 @@ namespace BrainsAndBacchanal.Protocol
         public MacoDrawView[] macoDraws;
         public HostDealView[] deals;
         public WagerView[] wagers;
+    }
+
+    /// <summary>
+    /// A card as its OWNER sees it, with playability DECIDED BY THE SERVER.
+    ///
+    /// `playable` and `unplayableReason` are never computed client-side — the
+    /// server sends them, so a phone renders what it is told rather than
+    /// evaluating eligibility. Phase 6 spec §7: a disabled button is a courtesy,
+    /// never the protection.
+    /// </summary>
+    [Serializable]
+    public class OwnCardView
+    {
+        public string cardInstanceId;
+        public string cardType;
+        public string category;
+        public string owningTeamId;
+        public string status;
+        public long dealtAt;
+        public long usedAt;
+        public string challengeId;
+
+        public bool playable;
+
+        /// <summary>
+        /// Why not, when <see cref="playable"/> is false. Empty string when
+        /// playable — JsonUtility maps a JSON null to "" for a string field.
+        /// </summary>
+        public string unplayableReason;
+    }
+
+    /// <summary>
+    /// What one team may know about ANOTHER team's hand: a COUNT and nothing
+    /// else. Phase 6 spec §42 — there is no field here that could carry a card
+    /// type, which is the protection rather than a rule to remember.
+    /// </summary>
+    [Serializable]
+    public class OpponentHandView
+    {
+        public string teamId;
+        public int cardCount;
+        public bool playedThisChallenge;
+    }
+
+    /// <summary>
+    /// One team's view of the Market: its own purchases always, others' only
+    /// after the reveal (GAME_RULES_LOCKED.md §10).
+    /// </summary>
+    [Serializable]
+    public class TeamMarketView
+    {
+        public MarketView market;
+        public MarketPurchaseView[] yourPurchases;
+
+        /// <summary>
+        /// EMPTY, not a filtered count, until the Market closes and reveals.
+        /// A count would itself be information §10 hides.
+        /// </summary>
+        public MarketPurchaseView[] otherTeamPurchases;
+
+        public int pendingSurcharge;
+        public string[] availableItems;
+    }
+
+    /// <summary>
+    /// A player's view of the Phase 6 shared systems — THE SECRECY-CRITICAL
+    /// TYPE on the Unity side, mirroring
+    /// packages/protocol/src/shared-systems.ts PlayerSharedSystemsView.
+    ///
+    /// Every field is either this team's OWN state, or a deliberate summary
+    /// (a count, not a list). There is no field here capable of carrying an
+    /// opponent's card, a hidden purchase, or an unrevealed Clash response.
+    /// </summary>
+    [Serializable]
+    public class PlayerSharedSystemsView
+    {
+        public OwnCardView[] yourHand;
+        public OpponentHandView[] opponentHands;
+        public CardWindowView cardWindow;
+
+        /// <summary>The Clash in progress. Responses stay hidden until resolved.</summary>
+        public ClashView clash;
+
+        /// <summary>
+        /// This team's OWN locked Clash response — the one deliberate exception
+        /// to "no card type before the reveal". Empty string when none.
+        /// </summary>
+        public string yourClashResponse;
+
+        public TeamMarketView market;
+        public HeldAdvantageView[] yourAdvantages;
+        public HeldEffectView[] heldEffects;
+        public MacoDeckView macoDeck;
+        public MacoDrawView[] yourMacoDraws;
+
+        /// <summary>A deal offered to this team and awaiting its answer. Null if none.</summary>
+        public HostDealView yourDeal;
+
+        public WagerView[] yourWagers;
     }
 }

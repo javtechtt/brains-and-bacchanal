@@ -4,6 +4,9 @@ import {
   asTeamId,
   DEFAULT_TEAM_LABELS,
   err,
+  GAME_EVENTS,
+  GAME_INTENTS,
+  HOST_RULING_KINDS,
   isSupportedProtocolVersion,
   normaliseDisplayName,
   ok,
@@ -15,6 +18,11 @@ import {
   toPublicPlayer,
   type EventEnvelope,
   type GameMode,
+  type GamePhase,
+  type GameSnapshot,
+  type GameTeamView,
+  type HostGameSnapshot,
+  type HostRulingKind,
   type IntentEnvelope,
   type KnownTeamId,
   type LobbyPlayer,
@@ -22,27 +30,41 @@ import {
   type LobbyRoom,
   type LobbySnapshot,
   type LobbyTeam,
+  type PlayerGameSnapshot,
   type PlayerId,
   type Result,
   type RoomId,
   type RoomStatus,
   type SequenceNumber,
+  type TeamId,
   type TeamMode,
 } from '@bb/protocol';
 import type { Clock } from './clock.js';
 import { EventLog } from './event-log.js';
+import { GameEngine, type EngineChange, type StartingTeam } from './game-engine.js';
 import { IntentRegistry } from './idempotency.js';
 
 /**
- * The authoritative production room — Phase 4.
+ * The authoritative production room — Phases 4 and 5.
  *
  * This owns the lobby: who is in it, which team they are on, whether that is
  * locked, and who is allowed to change any of it. The server is authoritative
  * (CLAUDE.md, ARCHITECTURE.md §4); Unity and phones send intents and render what
  * comes back.
  *
- * NO GAMEPLAY. No BB award, no card, no round, no buzzer, no scoring. The room
- * stops at a locked set of teams. Starting a game is Phase 5.
+ * Phase 5 adds the GAME. The room holds a `GameEngine` and routes gameplay
+ * intents to it, but keeps lobby concerns and game concerns in separate objects:
+ * the room knows about sockets, credentials and rosters; the engine knows about
+ * BB, phases, challenges, turns and timers, and has never heard of a connection.
+ *
+ * ONE EVENT LOG SERVES BOTH. Lobby and gameplay events share a single per-room
+ * sequence, because a client must be able to order "Team A reached 1,500 BB"
+ * against "Javal disconnected" — two independent counters could not express
+ * that, and a gap in either would stop meaning "you missed something".
+ *
+ * STILL NO ROUND RULES. No card, no Market, no Maco Mail, no wager, no buzzer,
+ * no question. Those are Phases 6-7 and several depend on rules open in
+ * docs/OPEN_RULES.md.
  *
  * Transport-free by design — plain objects in, events out — so the whole thing
  * is testable deterministically with a FakeClock, and so the raw-WebSocket
@@ -69,6 +91,15 @@ export interface RoomOptions {
   readonly mintToken: () => string;
   /** Mints player ids. Injected for the same reason. */
   readonly mintPlayerId: () => string;
+  /**
+   * Whether development engine controls are accepted on this server.
+   *
+   * Phase 5 spec §17 wants a way to exercise the BB ledger before any round
+   * exists; it also wants that tooling clearly separated from real gameplay.
+   * Gating it here means a production deployment physically cannot accept
+   * DEV_ADJUST_BB, whatever a client sends.
+   */
+  readonly devTools?: boolean;
 }
 
 /** Result of handling one intent: a reply, events to broadcast, private sends. */
@@ -94,6 +125,12 @@ export class Room {
   readonly #intents = new IntentRegistry();
   readonly #players = new Map<string, LobbyPlayerPrivate>();
   readonly #options: RoomOptions;
+  /**
+   * The game. Exists from room creation but does nothing until START_GAME,
+   * so there is no second object to create — and no window in which a game
+   * intent could arrive with nothing to answer it.
+   */
+  readonly #game: GameEngine;
 
   /** connectionId -> who that connection is. The only source of authority. */
   readonly #connectionRoles = new Map<string, RoomRole>();
@@ -111,6 +148,16 @@ export class Room {
     this.#log = new EventLog(options.roomId, options.clock);
     this.#createdAt = options.clock.now();
     this.#updatedAt = this.#createdAt;
+
+    // Shares this room's event log, so gameplay and lobby events carry one
+    // monotonic sequence.
+    this.#game = new GameEngine({
+      roomId: options.roomId,
+      clock: options.clock,
+      log: this.#log,
+      mintId: options.mintPlayerId,
+      devTools: options.devTools ?? false,
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -147,6 +194,15 @@ export class Room {
 
   get hostConnectionId(): string | null {
     return this.#hostConnectionId;
+  }
+
+  /** The game engine. Read-only access for the server and tests. */
+  get game(): GameEngine {
+    return this.#game;
+  }
+
+  get gameStarted(): boolean {
+    return this.#game.started;
   }
 
   player(playerId: PlayerId): LobbyPlayer | undefined {
@@ -214,6 +270,91 @@ export class Room {
     }));
   }
 
+  /**
+   * Game snapshot, shaped for who is asking.
+   *
+   * THE CONTENT BOUNDARY (Phase 5 spec §20). Host and player snapshots are
+   * separate types, not one shape with fields blanked out, so a future field
+   * has to be placed deliberately on one side or the other. The Host gets the
+   * BB ledger; a player gets their own identity, their team and the generic
+   * state of play.
+   *
+   * Neither carries a reconnect credential or the Host token — those exist only
+   * in the acknowledgement to the connection that earned them — and neither has
+   * anywhere to put an unrevealed answer, a hidden Market selection or another
+   * team's card hand. Those systems arrive in Phase 6 and will find the boundary
+   * already drawn.
+   */
+  gameSnapshot(forConnection: string | null = null): GameSnapshot {
+    const role = forConnection === null ? { kind: 'anonymous' as const } : this.roleOf(forConnection);
+
+    const base = {
+      protocolVersion: PROTOCOL_VERSION,
+      seq: this.#log.latestSeq(),
+      takenAt: asServerTimestamp(this.#clock.now()),
+      room: this.#roomState(),
+      players: [...this.#players.values()].map(toPublicPlayer),
+      teams: this.#gameTeams(),
+      teamMode: this.#teamMode,
+      game: this.#game.sessionView(),
+    };
+
+    if (role.kind === 'host') {
+      const hostSnapshot: HostGameSnapshot = {
+        ...base,
+        isHost: true,
+        ledger: this.#game.ledgerEntries,
+        devToolsEnabled: this.#game.devTools,
+      };
+      return hostSnapshot;
+    }
+
+    // Anyone who is not the verified Host gets the player-safe shape, including
+    // a connection that has not identified itself. Defaulting to the narrower
+    // view means a new caller cannot accidentally receive the Host's.
+    const playerId = role.kind === 'player' ? role.playerId : ('' as PlayerId);
+    const player = role.kind === 'player' ? this.#players.get(playerId) : undefined;
+    const teamId = player?.teamId ?? null;
+
+    const playerSnapshot: PlayerGameSnapshot = {
+      ...base,
+      isHost: false,
+      you: playerId,
+      yourTeamId: teamId,
+      youAreActive: role.kind === 'player' && this.#game.isActivePlayer(playerId),
+      yourTurn: this.#isYourTurn(playerId, teamId),
+    };
+    return playerSnapshot;
+  }
+
+  /**
+   * Whether it is this player's turn.
+   *
+   * True when the turn names the player, and also when it names their team
+   * without naming a player — a team turn is every member's turn, which is what
+   * a phone needs to know to stop saying "waiting for the Host".
+   */
+  #isYourTurn(playerId: PlayerId, teamId: TeamId | null): boolean {
+    const turn = this.#game.turn;
+    if (turn.teamId === null) return false;
+    if (turn.playerId !== null) return turn.playerId === playerId;
+    return teamId !== null && turn.teamId === teamId;
+  }
+
+  /** Teams with their authoritative balances. Empty before the game starts. */
+  #gameTeams(): readonly GameTeamView[] {
+    if (this.#game.started) return this.#game.teams();
+
+    // Before START_GAME there are no balances to report, and inventing a
+    // provisional 1,000 would show a score for a game that has not begun.
+    return this.#teamStates().map((team) => ({
+      teamId: team.teamId,
+      displayName: team.displayName,
+      memberIds: team.memberIds,
+      bb: 0,
+    }));
+  }
+
   // -------------------------------------------------------------------------
   // Intent handling
   // -------------------------------------------------------------------------
@@ -237,12 +378,28 @@ export class Room {
       );
     }
 
+    // A timer is checked whenever the room is touched, rather than scheduled.
+    // @bb/game-rules has no wall clock by design — ESLint bans setTimeout there
+    // — so expiry is observed on activity. The events it produces are attached
+    // to whatever outcome follows, so a client learns about the expiry in the
+    // same delivery as the action that revealed it.
+    const expiryEvents = this.#pollTimer();
+
     // Reads bypass deduplication entirely: they change nothing, so replaying one
     // is harmless, and recording them would grow the registry without purpose.
     if (intent.type === ROOM_INTENTS.REQUEST_LOBBY_SNAPSHOT) {
       return {
         ack: ok({ seq: this.#log.latestSeq(), payload: this.snapshot(connectionId) }),
-        broadcast: [],
+        broadcast: expiryEvents,
+        direct: [],
+        closeConnections: [],
+      };
+    }
+
+    if (intent.type === GAME_INTENTS.REQUEST_GAME_SNAPSHOT) {
+      return {
+        ack: ok({ seq: this.#log.latestSeq(), payload: this.gameSnapshot(connectionId) }),
+        broadcast: expiryEvents,
         direct: [],
         closeConnections: [],
       };
@@ -250,12 +407,15 @@ export class Room {
 
     if (this.#intents.has(intent.intentId)) {
       const originalSeq = this.#intents.resultOf(intent.intentId);
-      return this.#reject(
-        rejection('DUPLICATE_INTENT', 'This action was already processed.', {
-          intentId: intent.intentId,
-          ...(originalSeq === undefined ? {} : { originalSeq }),
-        }),
-      );
+      return {
+        ...this.#reject(
+          rejection('DUPLICATE_INTENT', 'This action was already processed.', {
+            intentId: intent.intentId,
+            ...(originalSeq === undefined ? {} : { originalSeq }),
+          }),
+        ),
+        broadcast: expiryEvents,
+      };
     }
 
     const outcome = this.#evaluate(connectionId, intent);
@@ -263,7 +423,33 @@ export class Room {
     if (outcome.ack.ok) {
       this.#intents.record(intent.intentId, outcome.ack.value.seq);
     }
-    return outcome;
+
+    if (expiryEvents.length === 0) return outcome;
+    // Expiry happened BEFORE this intent was evaluated, so its events go first.
+    return { ...outcome, broadcast: [...expiryEvents, ...outcome.broadcast] };
+  }
+
+  /**
+   * Emit a TIMER_EXPIRED event if a deadline has passed.
+   *
+   * Returns events rather than delivering them, so the caller decides when they
+   * reach clients. Reports at most once per timer — see TimerService.
+   */
+  #pollTimer(): EventEnvelope[] {
+    const expiry = this.#game.pollTimerExpiry();
+    if (expiry === null) return [];
+    return [this.#log.append(expiry.type, { kind: 'server' }, expiry.payload)];
+  }
+
+  /**
+   * Check for timer expiry outside intent handling.
+   *
+   * The server calls this on a slow tick so an expiry is announced even when
+   * nobody sends anything — which is the normal case, since a timer running out
+   * is precisely the moment when every phone is silent.
+   */
+  tick(): readonly EventEnvelope[] {
+    return this.#pollTimer();
   }
 
   #evaluate(connectionId: string, intent: IntentEnvelope): RoomOutcome {
@@ -290,6 +476,37 @@ export class Room {
         return this.#unlockTeams(connectionId, intent);
       case ROOM_INTENTS.HOST_CLOSE_ROOM:
         return this.#closeRoom(connectionId, intent);
+
+      // --- Phase 5: gameplay -------------------------------------------------
+      case GAME_INTENTS.START_GAME:
+        return this.#startGame(connectionId, intent);
+      case GAME_INTENTS.HOST_ADVANCE_PHASE:
+        return this.#advancePhase(connectionId, intent);
+      case GAME_INTENTS.HOST_PREPARE_CHALLENGE:
+        return this.#prepareChallenge(connectionId, intent);
+      case GAME_INTENTS.HOST_START_CHALLENGE:
+        return this.#engineAction(connectionId, intent, () => this.#game.startChallenge());
+      case GAME_INTENTS.HOST_SET_TURN:
+        return this.#setTurn(connectionId, intent);
+      case GAME_INTENTS.HOST_SET_ACTIVE_PLAYERS:
+        return this.#setActivePlayers(connectionId, intent);
+      case GAME_INTENTS.HOST_START_TIMER:
+        return this.#startTimer(connectionId, intent);
+      case GAME_INTENTS.HOST_CANCEL_TIMER:
+        return this.#engineAction(connectionId, intent, () => this.#game.cancelTimer());
+      case GAME_INTENTS.HOST_REQUEST_REVIEW:
+        return this.#engineAction(connectionId, intent, () => this.#game.requestReview());
+      case GAME_INTENTS.HOST_RULING:
+        return this.#hostRuling(connectionId, intent);
+      case GAME_INTENTS.HOST_RESOLVE_CHALLENGE:
+        return this.#resolveChallenge(connectionId, intent);
+      case GAME_INTENTS.HOST_PAUSE_GAME:
+        return this.#engineAction(connectionId, intent, () => this.#game.pause('host_requested'));
+      case GAME_INTENTS.HOST_RESUME_GAME:
+        return this.#resumeGame(connectionId, intent);
+      case GAME_INTENTS.DEV_ADJUST_BB:
+        return this.#devAdjustBb(connectionId, intent);
+
       default:
         return this.#reject(rejection('INVALID_REQUEST', 'Unknown intent type.', { type: intent.type }));
     }
@@ -713,6 +930,10 @@ export class Room {
     const removedConnection = player.connectionId;
     this.#players.delete(playerId);
     if (removedConnection !== null) this.#connectionRoles.delete(removedConnection);
+    // Keep the game's rosters in step. A removed player must not stay named as
+    // active or as the turn holder, or the game would wait on someone who is
+    // gone — and a disconnect from their dead socket must not pause anything.
+    this.#game.removeMember(playerId as PlayerId);
     this.#touch();
 
     const event = this.#log.append(
@@ -836,6 +1057,346 @@ export class Room {
   }
 
   // -------------------------------------------------------------------------
+  // Phase 5 — gameplay
+  //
+  // Every handler here is Host-only and goes through the same #requireHost gate
+  // as the lobby's. A player client has no route to any of them, which is what
+  // Phase 5 spec §15 requires: a phone must not be able to send "correct=true"
+  // and have the server believe it.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Start the game.
+   *
+   * PRECONDITIONS (Phase 5 spec §1): the room exists, is not closed, teams are
+   * locked, every participating team has players, and no game has started.
+   *
+   * Teams must be LOCKED. Starting with an open roster would mean a player
+   * joining mid-game with no rule for what they receive — and no locked rule
+   * says. The Host locks deliberately first.
+   */
+  #startGame(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    if (this.#status === 'CLOSED') {
+      return this.#reject(rejection('WRONG_STATE', 'This room has closed.'));
+    }
+    if (!this.#teamsLocked) {
+      return this.#reject(
+        rejection('WRONG_STATE', 'Lock the teams before starting the game.', {
+          teamsLocked: false,
+        }),
+      );
+    }
+    if (this.#game.started) {
+      return this.#reject(rejection('WRONG_STATE', 'The game has already started.'));
+    }
+
+    // Re-checked even though locking already required it: unlocking and
+    // relocking is possible, and a game must never start with an empty team.
+    const teams = this.#teamStates();
+    const empty = teams.filter((team) => team.memberIds.length === 0);
+    if (empty.length > 0) {
+      return this.#reject(
+        rejection('ILLEGAL_ACTION', 'Every team needs at least one player.', {
+          emptyTeams: empty.map((t) => t.teamId).join(','),
+        }),
+      );
+    }
+
+    const starting: StartingTeam[] = teams.map((team) => ({
+      teamId: team.teamId,
+      displayName: team.displayName,
+      memberIds: team.memberIds,
+    }));
+
+    const outcome = this.#game.startGame(starting);
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    this.#touch();
+    const event = this.#log.append(
+      outcome.value.type,
+      { kind: 'host', sessionId: '' as never },
+      outcome.value.payload,
+      intent.intentId,
+    );
+
+    // The starting balances were seeded through the ledger; link those entries
+    // to the event that announced them.
+    for (const entry of this.#game.ledgerEntries) {
+      if (entry.seq === null) this.#game.attachLedgerSeq(entry.entryId, event.seq);
+    }
+
+    return { ack: ok({ seq: event.seq }), broadcast: [event], direct: [], closeConnections: [] };
+  }
+
+  /**
+   * Run a Host-authorised engine action that needs no payload.
+   *
+   * The engine owns the decision and returns either an event to publish or a
+   * structured rejection; this only supplies authority and delivery.
+   */
+  #engineAction(
+    connectionId: string,
+    intent: IntentEnvelope,
+    action: () => Result<EngineChange>,
+  ): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const outcome = action();
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    return this.#publish(outcome.value, intent);
+  }
+
+  #publish(change: EngineChange, intent: IntentEnvelope): RoomOutcome {
+    this.#touch();
+    const event = this.#log.append(
+      change.type,
+      { kind: 'host', sessionId: '' as never },
+      change.payload,
+      intent.intentId,
+    );
+    return { ack: ok({ seq: event.seq }), broadcast: [event], direct: [], closeConnections: [] };
+  }
+
+  #advancePhase(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const to = readString(intent.payload, 'to');
+    if (to === null || !isGamePhase(to)) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing or unknown target phase.'));
+    }
+
+    const outcome = this.#game.advancePhase(to);
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    return this.#publish(outcome.value, intent);
+  }
+
+  #prepareChallenge(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const challengeType = readString(intent.payload, 'challengeType');
+    if (challengeType === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing challengeType.'));
+    }
+
+    // configRef is an opaque pointer to configuration, never content.
+    // CONTENT_POLICY.md — question text and accepted answers must never travel
+    // to a client, and a snapshot carrying this reference carries no content.
+    const outcome = this.#game.prepareChallenge({
+      challengeType,
+      configRef: readString(intent.payload, 'configRef'),
+    });
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    return this.#publish(outcome.value, intent);
+  }
+
+  #setTurn(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const teamIdRaw = readString(intent.payload, 'teamId');
+    const playerIdRaw = readString(intent.payload, 'playerId');
+
+    const outcome = this.#game.setTurn({
+      teamId: teamIdRaw === null ? null : asTeamId(teamIdRaw),
+      playerId: playerIdRaw === null ? null : (playerIdRaw as PlayerId),
+    });
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    return this.#publish(outcome.value, intent);
+  }
+
+  #setActivePlayers(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const raw = readField(intent.payload, 'playerIds');
+    if (!Array.isArray(raw) || raw.some((id) => typeof id !== 'string' || id === '')) {
+      return this.#reject(rejection('INVALID_REQUEST', 'playerIds must be an array of ids.'));
+    }
+
+    const outcome = this.#game.setActivePlayers(raw as PlayerId[]);
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    return this.#publish(outcome.value, intent);
+  }
+
+  #startTimer(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const durationMs = readField(intent.payload, 'durationMs');
+    if (typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs <= 0) {
+      return this.#reject(rejection('INVALID_REQUEST', 'durationMs must be a positive number.'));
+    }
+
+    const outcome = this.#game.startTimer(durationMs);
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * Record a Host ruling.
+   *
+   * The ruling's sequence number is needed to build it, but the number is only
+   * assigned when the event is appended — so the event is appended first with
+   * the ruling's own details, and the ruling is recorded against that number.
+   * The engine validates before anything is written, so an invalid ruling never
+   * reaches the log.
+   */
+  #hostRuling(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const kindRaw = readString(intent.payload, 'kind');
+    if (kindRaw === null || !isHostRulingKind(kindRaw)) {
+      return this.#reject(
+        rejection('INVALID_REQUEST', 'Unknown ruling kind.', { kind: kindRaw ?? '' }),
+      );
+    }
+
+    const teamIdRaw = readString(intent.payload, 'teamId');
+    const playerIdRaw = readString(intent.payload, 'playerId');
+    const note = readString(intent.payload, 'note');
+
+    const nextSeq = asSequenceNumber(this.#log.latestSeq() + 1);
+    const outcome = this.#game.recordRuling({
+      kind: kindRaw,
+      teamId: teamIdRaw === null ? null : asTeamId(teamIdRaw),
+      playerId: playerIdRaw === null ? null : (playerIdRaw as PlayerId),
+      note,
+      seq: nextSeq,
+    });
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    this.#touch();
+    const event = this.#log.append(
+      GAME_EVENTS.HOST_RULING_RECORDED,
+      { kind: 'host', sessionId: '' as never },
+      { ruling: outcome.value, challenge: this.#game.challengeView() },
+      intent.intentId,
+    );
+
+    return { ack: ok({ seq: event.seq }), broadcast: [event], direct: [], closeConnections: [] };
+  }
+
+  #resolveChallenge(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const winningTeamIds = readStringArray(intent.payload, 'winningTeamIds');
+    if (winningTeamIds === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'winningTeamIds must be an array of ids.'));
+    }
+    const winningPlayerIds = readStringArray(intent.payload, 'winningPlayerIds');
+    if (winningPlayerIds === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'winningPlayerIds must be an array of ids.'));
+    }
+
+    const bbDeltas = readNumberMap(intent.payload, 'bbDeltas');
+    if (bbDeltas === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'bbDeltas must map team ids to numbers.'));
+    }
+
+    const outcome = this.#game.resolveChallenge({
+      winningTeamIds: winningTeamIds as TeamId[],
+      winningPlayerIds: winningPlayerIds as PlayerId[],
+      bbDeltas,
+      decidedByHost: true,
+      note: readString(intent.payload, 'note'),
+    });
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    this.#touch();
+    const event = this.#log.append(
+      outcome.value.change.type,
+      { kind: 'host', sessionId: '' as never },
+      outcome.value.change.payload,
+      intent.intentId,
+    );
+
+    for (const entry of outcome.value.ledgerEntries) {
+      this.#game.attachLedgerSeq(entry.entryId, event.seq);
+    }
+
+    return { ack: ok({ seq: event.seq }), broadcast: [event], direct: [], closeConnections: [] };
+  }
+
+  /**
+   * Resume.
+   *
+   * Host-only twice over: once at this gate, and again inside the engine's
+   * transition, which refuses any actor that is not the Host. The redundancy is
+   * deliberate — D-011 is the rule most likely to be bypassed by accident from a
+   * future call site.
+   */
+  #resumeGame(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const outcome = this.#game.resume(true);
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * DEVELOPMENT ONLY — adjust a team's BB directly.
+   *
+   * Phase 5 spec §17 asks for a harness that can prove the ledger and the floor
+   * before any round exists. Refused outright unless the server was started
+   * with development tools enabled, and every entry it writes is stamped
+   * `dev_adjustment`, so a test award can never be mistaken for earned BB.
+   */
+  #devAdjustBb(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    if (!this.#game.devTools) {
+      return this.#reject(
+        rejection('ILLEGAL_ACTION', 'Development controls are disabled on this server.'),
+      );
+    }
+
+    const teamId = readString(intent.payload, 'teamId');
+    const delta = readField(intent.payload, 'delta');
+    if (teamId === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing teamId.'));
+    }
+    if (typeof delta !== 'number' || !Number.isFinite(delta)) {
+      return this.#reject(rejection('INVALID_REQUEST', 'delta must be a finite number.'));
+    }
+
+    const outcome = this.#game.adjustBb({
+      teamId: asTeamId(teamId),
+      delta,
+      reason: 'dev_adjustment',
+      note: readString(intent.payload, 'note'),
+    });
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    this.#touch();
+    const event = this.#log.append(
+      outcome.value.change.type,
+      { kind: 'host', sessionId: '' as never },
+      outcome.value.change.payload,
+      intent.intentId,
+    );
+    this.#game.attachLedgerSeq(outcome.value.entry.entryId, event.seq);
+
+    return { ack: ok({ seq: event.seq }), broadcast: [event], direct: [], closeConnections: [] };
+  }
+
+  // -------------------------------------------------------------------------
   // Connection lifecycle
   // -------------------------------------------------------------------------
 
@@ -846,11 +1407,19 @@ export class Room {
    * LEAVE_ROOM: membership, team and credential all survive so the player can
    * come back to exactly where they were.
    *
-   * It also does NOT pause anything. D-011 auto-pauses on an active player's
-   * disconnect, but that rule protects gameplay in progress; there is no
-   * gameplay in a lobby, and pausing a lobby would mean nothing. Phase 5 wires
-   * the pause when there is something to pause — the spec says so explicitly
-   * (§9), and the benchmark session already proves the mechanism works.
+   * PHASE 5 WIRES D-011 HERE. If a game is running and the dropped player is
+   * ACTIVE — required by the current challenge — the game pauses automatically
+   * and the timer freezes with its remaining time intact. Three cases that do
+   * NOT pause, each for a reason:
+   *
+   *   - a disconnect in the LOBBY. There is no gameplay to protect, and the
+   *     rule is about gameplay.
+   *   - a NON-ACTIVE player. Most of the room is watching at any moment;
+   *     pausing every time a spectator's phone sleeps would stop the party
+   *     constantly (Phase 5 spec §10).
+   *   - the HOST. No locked rule says what a Host disconnect should do, so
+   *     nothing is invented: the loss of connection is recorded and play is
+   *     left exactly as it was. See docs/OPEN_RULES.md.
    */
   onDisconnect(connectionId: string): readonly EventEnvelope[] {
     const role = this.roleOf(connectionId);
@@ -887,12 +1456,26 @@ export class Room {
     });
     this.#touch();
 
-    return [
+    const events: EventEnvelope[] = [
       this.#log.append(ROOM_EVENTS.PLAYER_DISCONNECTED, { kind: 'server' }, {
         playerId: role.playerId,
         room: this.#roomState(),
+        // Stated on the wire so a Host display can explain WHY the game paused
+        // without correlating two events itself.
+        wasActivePlayer: this.#game.isActivePlayer(role.playerId),
       }),
     ];
+
+    // D-011. Returns null unless this disconnect actually caused a pause: a
+    // lobby, a non-active player, or an already-paused game all decline, and an
+    // already-paused game declines specifically so the captured return phase is
+    // not overwritten by a second pause.
+    const pause = this.#game.onActivePlayerDisconnect(role.playerId);
+    if (pause !== null) {
+      events.push(this.#log.append(pause.type, { kind: 'server' }, pause.payload));
+    }
+
+    return events;
   }
 
   /** Register a connection with no identity yet. */
@@ -934,6 +1517,60 @@ function readString(payload: unknown, field: string): string | null {
   const value = readField(payload, field);
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
+
+/**
+ * Read an array of non-empty ids.
+ *
+ * Returns `[]` for an absent field and `null` for a malformed one, so a caller
+ * can tell "not supplied" from "supplied wrongly" and reject only the latter.
+ */
+function readStringArray(payload: unknown, field: string): string[] | null {
+  const value = readField(payload, field);
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) return null;
+  if (value.some((item) => typeof item !== 'string' || item === '')) return null;
+  return value as string[];
+}
+
+/** Read a teamId -> amount map. Same absent/malformed distinction. */
+function readNumberMap(payload: unknown, field: string): Record<string, number> | null {
+  const value = readField(payload, field);
+  if (value === undefined || value === null) return {};
+  if (typeof value !== 'object' || Array.isArray(value)) return null;
+
+  const result: Record<string, number> = {};
+  for (const [key, amount] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof amount !== 'number' || !Number.isFinite(amount)) return null;
+    result[key] = amount;
+  }
+  return result;
+}
+
+/** Phase names, validated at runtime because intents arrive over a network. */
+const GAME_PHASE_NAMES = new Set<string>([
+  'BOOT',
+  'LOBBY',
+  'TEAM_LOCK',
+  'ROUND_INTRO',
+  'MARKET',
+  'CHALLENGE_INTRO',
+  'ACTIVE_PLAY',
+  'HOST_REVIEW',
+  'RESULT',
+  'ROUND_COMPLETE',
+  'PAUSED',
+  'SUDDEN_DEATH',
+  'GAME_OVER',
+]);
+
+function isGamePhase(value: string): value is GamePhase {
+  return GAME_PHASE_NAMES.has(value);
+}
+
+function isHostRulingKind(value: string): value is HostRulingKind {
+  return (HOST_RULING_KINDS as readonly string[]).includes(value);
+}
+
 
 /**
  * Compare two secrets without leaking their contents through timing.

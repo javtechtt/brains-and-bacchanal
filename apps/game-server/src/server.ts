@@ -10,9 +10,10 @@ import { ROOM_WS_PATH } from './transport/websocket.js';
 /**
  * The production game server.
  *
- * PHASE 4 SCOPE: /health, room resolution over HTTP, and the authoritative
- * room service on a raw WebSocket (D-014). No gameplay — the server hosts a
- * lobby and stops at a locked set of teams.
+ * SCOPE: /health, room resolution over HTTP, and the authoritative room service
+ * on a raw WebSocket (D-014). Phase 5 adds the generic game engine behind that
+ * same socket — starting a game, the BB ledger, challenges, turns, timers and
+ * pause — with no round rules, no cards and no content.
  *
  * Socket.IO is deliberately absent from this path. It stays installed for the
  * benchmark tooling, which is separate infrastructure.
@@ -105,6 +106,7 @@ export function createGameServer(
     mode: 'local_party',
     capacity: config.roomCapacity,
     publicBaseUrl,
+    devTools: config.devTools,
   });
 
   return {
@@ -125,6 +127,7 @@ export function createGameServer(
               roomSocket: ROOM_WS_PATH,
               publicBaseUrl,
               capacity: config.roomCapacity,
+              devTools: config.devTools,
             },
             'game-server listening',
           );

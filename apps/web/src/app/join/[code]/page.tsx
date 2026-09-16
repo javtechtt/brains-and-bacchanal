@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { DISPLAY_NAME_MAX_LENGTH, type EventEnvelope, type LobbySnapshot } from '@bb/protocol';
+import {
+  DISPLAY_NAME_MAX_LENGTH,
+  type EventEnvelope,
+  type LobbySnapshot,
+  type PlayerGameSnapshot,
+} from '@bb/protocol';
 import {
   BrowserRoomClient,
   clearIdentity,
@@ -10,8 +15,29 @@ import {
   type ConnectionStatus,
 } from '../../../rooms/client';
 import { serverUrl } from '../../../rooms/config';
+import { PlayerGame } from '../../../rooms/PlayerGame';
 import { PlayerLobby } from '../../../rooms/PlayerLobby';
 import * as ui from '../../../rooms/ui';
+
+/**
+ * Event names that mean "the game state changed".
+ *
+ * Matched by prefix rather than listed exhaustively, so a Phase 6 event does not
+ * silently fail to refresh a phone. The payloads themselves are never
+ * interpreted here — the phone re-reads the authoritative snapshot instead,
+ * which is what keeps round knowledge out of the client entirely.
+ */
+const GAME_EVENT_PREFIXES = [
+  'GAME_',
+  'BB_',
+  'CHALLENGE_',
+  'TURN_',
+  'TIMER_',
+  'ACTIVE_PLAYERS_',
+  'HOST_RULING',
+  'PHASE_',
+  'REVIEW_',
+];
 
 /**
  * The page a QR code opens: /join/<ROOMCODE>.
@@ -21,6 +47,10 @@ import * as ui from '../../../rooms/ui';
  * for a name again and without creating a second player. Only if that fails does
  * it ask for a name.
  *
+ * Once the Host starts the game it switches from the lobby view to the generic
+ * game view; a mid-game refresh comes back INTO the game, not to a waiting
+ * screen.
+ *
  * The room code comes from the URL, so a scanned QR needs no typing at all.
  */
 export default function JoinPage() {
@@ -28,6 +58,10 @@ export default function JoinPage() {
   const roomCode = (params.code ?? '').toUpperCase();
 
   const [snapshot, setSnapshot] = useState<LobbySnapshot | null>(null);
+  // Non-null once a game is running. The page shows the game view in
+  // preference to the lobby, so a player leaves the waiting screen the moment
+  // the Host starts.
+  const [game, setGame] = useState<PlayerGameSnapshot | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -44,17 +78,26 @@ export default function JoinPage() {
     // reading them while rendering caused a hydration mismatch in Phase 3.
     const client = new BrowserRoomClient(serverUrl(), {
       onSnapshot: setSnapshot,
+      onGameSnapshot: setGame,
       onEvent: (event: EventEnvelope) => {
         // Any room-state event may change what this player should see. The
         // snapshot is authoritative, so re-read rather than patching locally.
         if (event.type.startsWith('PLAYER_') || event.type.startsWith('TEAM')) {
           void client.refreshSnapshot();
         }
+
+        // Gameplay events all resolve to "the game state changed"; the phone
+        // re-reads rather than interpreting each payload, which keeps round
+        // knowledge out of the client entirely.
+        if (GAME_EVENT_PREFIXES.some((prefix) => event.type.startsWith(prefix))) {
+          void client.refreshGameSnapshot();
+        }
       },
       onStatus: setStatus,
       onEvicted: (reason) => {
         setEvicted(reason);
         setSnapshot(null);
+        setGame(null);
       },
     });
     clientRef.current = client;
@@ -69,6 +112,10 @@ export default function JoinPage() {
             // Credential rejected: left, removed, or the server restarted and
             // lost every room. Fall through to the join form.
             setError(null);
+          } else {
+            // A refresh mid-game must come back INTO the game, not to a
+            // waiting screen that says nothing is happening.
+            await client.refreshGameSnapshot();
           }
         }
       })
@@ -87,7 +134,12 @@ export default function JoinPage() {
     const ack = await client.join(roomCode, displayName);
     setBusy(false);
 
-    if (!ack.ok) setError(ack.error.message);
+    if (!ack.ok) {
+      setError(ack.error.message);
+      return;
+    }
+    // Covers the rare case of joining a room whose game has already begun.
+    await client.refreshGameSnapshot();
   }, [displayName, roomCode]);
 
   const handleLeave = useCallback(async () => {
@@ -96,6 +148,7 @@ export default function JoinPage() {
     await client.leave();
     clearIdentity(roomCode);
     setSnapshot(null);
+    setGame(null);
     setEvicted('You left the room.');
   }, [roomCode]);
 
@@ -119,6 +172,11 @@ export default function JoinPage() {
         </div>
       </main>
     );
+  }
+
+  // The game view wins while a game is running; the lobby is what comes before.
+  if (game !== null && game.game !== null) {
+    return <PlayerGame snapshot={game} status={status} />;
   }
 
   if (snapshot !== null) {

@@ -1,12 +1,14 @@
 'use client';
 
 import {
+  GAME_INTENTS,
   NO_ROOM_ID,
   PROTOCOL_VERSION,
   ROOM_INTENTS,
   type EventEnvelope,
   type IntentAck,
   type LobbySnapshot,
+  type PlayerGameSnapshot,
 } from '@bb/protocol';
 
 /**
@@ -33,6 +35,14 @@ export interface StoredIdentity {
 
 export interface RoomClientHandlers {
   onSnapshot: (snapshot: LobbySnapshot) => void;
+  /**
+   * The game state, once a game is running.
+   *
+   * Separate from the lobby snapshot because they are different shapes with
+   * different rules about what they may contain — see the Host/player split in
+   * packages/protocol/src/game.ts. The page shows whichever is current.
+   */
+  onGameSnapshot: (snapshot: PlayerGameSnapshot) => void;
   onEvent: (event: EventEnvelope) => void;
   onStatus: (status: ConnectionStatus) => void;
   /** Membership ended: removed by the Host, left, or the room closed. */
@@ -309,6 +319,20 @@ export class BrowserRoomClient {
     const ack = await this.submit(ROOM_INTENTS.REQUEST_LOBBY_SNAPSHOT);
     if (ack.ok && ack.snapshot !== undefined) {
       this.#handlers.onSnapshot(ack.snapshot as LobbySnapshot);
+    }
+  }
+
+  /**
+   * Fetch the authoritative game state.
+   *
+   * Called after any gameplay event rather than patching state from each
+   * payload. Patching drifts the moment one event is missed; replacing from a
+   * snapshot cannot, and a phone on party Wi-Fi WILL miss one.
+   */
+  async refreshGameSnapshot(): Promise<void> {
+    const ack = await this.submit(GAME_INTENTS.REQUEST_GAME_SNAPSHOT);
+    if (ack.ok && ack.snapshot !== undefined) {
+      this.#handlers.onGameSnapshot(ack.snapshot as PlayerGameSnapshot);
     }
   }
 

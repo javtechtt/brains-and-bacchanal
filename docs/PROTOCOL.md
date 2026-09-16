@@ -13,9 +13,14 @@ travel in them: the production lobby — rooms, players, teams and reconnect.
 They are specified in **`docs/LOBBY.md`** and listed under
 [Phase 4 messages](#phase-4-messages-lobby) below.
 
-Gameplay intents (`PLAY_CARD`, `PURCHASE_ITEM`, `BUZZ`, `HOST_MARK_VALID`, …)
-are still **not** defined. They belong to the phases that implement those
-behaviours, and several depend on rules still open in `OPEN_RULES.md`.
+Phase 5 adds the **generic game** messages: starting a game, the BB ledger,
+generic challenges, turn ownership, timers, Host rulings and the split
+Host/player game snapshots. They are specified in **`docs/GAME_ENGINE.md`** and
+listed under [Phase 5 messages](#phase-5-messages-game-engine) below.
+
+Round-specific intents (`PLAY_CARD`, `PURCHASE_ITEM`, `BUZZ`, …) are still
+**not** defined. They belong to the phases that implement those behaviours, and
+several depend on rules still open in `OPEN_RULES.md`.
 
 ## Transport independence
 
@@ -259,6 +264,60 @@ A reconnect credential and the `hostToken` appear **only** in the acknowledgemen
 to the one connection that earned them. They are absent from every event payload
 and every snapshot — `toPublicPlayer` is the only route from server state to a
 client, and it strips the secret.
+
+## Phase 5 messages (game engine)
+
+Full behaviour is in `docs/GAME_ENGINE.md`; this is the protocol-level summary.
+
+**Intents** — every one is Host-only except the read.
+
+| Intent | Notes |
+|---|---|
+| `START_GAME` | Requires locked teams. Seeds 1,000 BB per team |
+| `HOST_ADVANCE_PHASE` | Legality comes from `lifecycle.ts`, not the intent |
+| `HOST_PREPARE_CHALLENGE` | Generic `challengeType` + opaque `configRef` |
+| `HOST_START_CHALLENGE` | |
+| `HOST_SET_TURN` | Team, optionally a player on that team |
+| `HOST_SET_ACTIVE_PLAYERS` | What the D-011 auto-pause keys on |
+| `HOST_START_TIMER` / `HOST_CANCEL_TIMER` | Caller supplies the duration |
+| `HOST_REQUEST_REVIEW` | Hand the challenge to the Host |
+| `HOST_RULING` | Subjective judgment; recorded, never re-judged |
+| `HOST_RESOLVE_CHALLENGE` | Applies BB **through the ledger** |
+| `HOST_PAUSE_GAME` / `HOST_RESUME_GAME` | Resume is Host-only |
+| `REQUEST_GAME_SNAPSHOT` | **Read-only**, any client |
+| `DEV_ADJUST_BB` | **Development only** — see D-024 |
+
+**Events**: `GAME_STARTED`, `PHASE_CHANGED`, `BB_CHANGED`, `CHALLENGE_PREPARED`,
+`CHALLENGE_STARTED`, `CHALLENGE_RESOLVED`, `TURN_CHANGED`,
+`ACTIVE_PLAYERS_CHANGED`, `TIMER_STARTED`, `TIMER_CANCELLED`, `TIMER_EXPIRED`,
+`HOST_RULING_RECORDED`, `REVIEW_REQUESTED`, `GAME_PAUSED`, `GAME_RESUMED`.
+
+### The snapshot splits in two
+
+Phase 4 had one lobby snapshot because Host and players were entitled to the
+same facts. Phase 5 splits it into `HostGameSnapshot` and `PlayerGameSnapshot`.
+
+They are **separate types, not one shape with fields blanked out**, so a future
+field has to be placed deliberately on one side or the other. The Host gets the
+BB ledger; a player gets their own identity, team, `youAreActive` and `yourTurn`.
+Team balances are on both — a party game shows the scores.
+
+Neither has anywhere to put a credential, the Host token, an unrevealed answer, a
+hidden Market selection or another team's card hand. The boundary is drawn before
+there is anything secret to put on the wrong side of it.
+
+A connection that has not identified itself receives the **player-safe** shape.
+
+### `TIMER_EXPIRED` decides nothing
+
+It reports that a deadline passed and hands the challenge to the Host. Its
+payload carries `requiresHostDecision: true` so no client invents a consequence.
+A timeout is **not** a wrong answer — D-022.
+
+### One sequence for lobby and gameplay
+
+Gameplay events share the room's `EventLog`, so a client can order a BB change
+against a disconnect. D-023.
 
 ## Event history
 

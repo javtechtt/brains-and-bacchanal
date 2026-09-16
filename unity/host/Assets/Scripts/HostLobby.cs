@@ -10,10 +10,14 @@ using BrainsAndBacchanal.Util;
 namespace BrainsAndBacchanal
 {
     /// <summary>
-    /// The Phase 4 Unity Host lobby — the first FUNCTIONAL Host screen.
+    /// The functional Unity Host screen — Phases 4 and 5.
     ///
     /// It creates a room, shows the code and a scannable QR, lists players as
-    /// they join, lets the Host build teams, and locks them.
+    /// they join, lets the Host build teams, locks them, and starts the game.
+    ///
+    /// The Phase 5 ENGINE TEST PANEL lives in HostEnginePanel.cs — a separate
+    /// partial so that development-only tooling is obvious at a glance and can
+    /// be deleted later without touching the lobby.
     ///
     /// DELIBERATELY UNSTYLED. IMGUI, no artwork, no animation, no sound. Phase 8
     /// owns presentation; building it now would mean rebuilding it then.
@@ -23,7 +27,7 @@ namespace BrainsAndBacchanal
     /// predicts the outcome locally, so a rejected action simply leaves the
     /// display showing the truth.
     /// </summary>
-    public class HostLobby : MonoBehaviour
+    public partial class HostLobby : MonoBehaviour
     {
         [Header("Server")]
         [Tooltip("Game server host. The player web app is assumed on port 3000 of the same machine.")]
@@ -34,17 +38,32 @@ namespace BrainsAndBacchanal
         private readonly BenchmarkWebSocketClient _client = new BenchmarkWebSocketClient();
 
         private LobbySnapshot _snapshot;
+
+        /// <summary>
+        /// Authoritative game state, once a game is running.
+        ///
+        /// Replaced wholesale from a server snapshot rather than patched from
+        /// individual event payloads — a patched view drifts the moment one
+        /// event is missed, and nothing here is entitled to compute game state
+        /// of its own.
+        /// </summary>
+        private HostGameSnapshot _game;
+
         private string _roomCode = "";
         private string _hostToken = "";
         private string _joinUrl = "";
         private string _status = "Not connected.";
         private string _lastError = "";
 
+        /// <summary>Most recent gameplay event type, for the test display.</summary>
+        private string _lastEvent = "";
+
         private Texture2D _qrTexture;
         private string _qrEncodedUrl = "";
 
         /// <summary>Player currently selected for a team action.</summary>
         private string _selectedPlayerId = "";
+
 
         private Vector2 _playerScroll;
         private bool _busy;
@@ -107,6 +126,28 @@ namespace BrainsAndBacchanal
 
                 case RoomEvents.ConnectionSuperseded:
                     _status = "Another window took over this Host.";
+                    break;
+
+                // Every gameplay event resolves to "the game changed". The Host
+                // re-reads the authoritative snapshot rather than interpreting
+                // each payload, which is what keeps game rules out of Unity.
+                case GameEvents.GameStarted:
+                case GameEvents.PhaseChanged:
+                case GameEvents.BbChanged:
+                case GameEvents.ChallengePrepared:
+                case GameEvents.ChallengeStarted:
+                case GameEvents.ChallengeResolved:
+                case GameEvents.TurnChanged:
+                case GameEvents.ActivePlayersChanged:
+                case GameEvents.TimerStarted:
+                case GameEvents.TimerCancelled:
+                case GameEvents.TimerExpired:
+                case GameEvents.HostRulingRecorded:
+                case GameEvents.ReviewRequested:
+                case GameEvents.GamePaused:
+                case GameEvents.GameResumed:
+                    _lastEvent = envelope.type;
+                    _ = RefreshGameSnapshotAsync();
                     break;
             }
         }
@@ -222,6 +263,8 @@ namespace BrainsAndBacchanal
         private void ResetToSetupScreen(string statusMessage)
         {
             _snapshot = null;
+            _game = null;
+            _lastEvent = "";
             _roomCode = "";
             _hostToken = "";
             _joinUrl = "";
@@ -245,6 +288,46 @@ namespace BrainsAndBacchanal
 
             var snapshot = JsonUtility.FromJson<LobbySnapshot>(ack.snapshotJson);
             if (snapshot != null) _snapshot = snapshot;
+        }
+
+        /// <summary>
+        /// Re-read the authoritative game state.
+        ///
+        /// A read: it emits no event and consumes no sequence number, so calling
+        /// it freely cannot inflate the room's sequence (a real Phase 3 bug).
+        /// </summary>
+        private async Task RefreshGameSnapshotAsync()
+        {
+            var ack = await _client.SubmitAsync(GameIntents.RequestGameSnapshot, "{}")
+                .ConfigureAwait(false);
+            if (ack == null || !ack.ok || string.IsNullOrEmpty(ack.snapshotJson)) return;
+
+            var snapshot = JsonUtility.FromJson<HostGameSnapshot>(ack.snapshotJson);
+            if (snapshot != null) _game = snapshot;
+        }
+
+        /// <summary>
+        /// Send a gameplay intent, then re-read both snapshots.
+        ///
+        /// Re-reading rather than assuming success is the same discipline as the
+        /// lobby's: the server may have rejected this, and only the snapshot
+        /// knows what is actually true.
+        /// </summary>
+        private async Task SubmitGameIntentAsync(string type, string payloadJson)
+        {
+            _busy = true;
+            try
+            {
+                var ack = await _client.SubmitAsync(type, payloadJson).ConfigureAwait(false);
+                _lastError = ack != null && !ack.ok ? ack.error?.message ?? "Rejected." : "";
+
+                await RefreshGameSnapshotAsync().ConfigureAwait(false);
+                await RefreshSnapshotAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                _busy = false;
+            }
         }
 
         private async Task SubmitHostIntentAsync(string type, string payloadJson)
@@ -354,7 +437,13 @@ namespace BrainsAndBacchanal
             // The fix: capture ONE reference at the top of OnGUI and pass it
             // through explicitly, so every draw call in this pass — Layout and
             // Repaint alike — sees the identical value.
+            //
+            // _game is captured for exactly the same reason, and matters MORE:
+            // it changes far more often than the lobby roster (every BB award,
+            // every turn, every timer event), so an uncaptured read would hit
+            // the Layout/Repaint mismatch routinely rather than rarely.
             var snapshot = _snapshot;
+            var game = _game;
 
             GUILayout.BeginArea(new Rect(16, 16, Screen.width - 32, Screen.height - 32));
 
@@ -377,9 +466,11 @@ namespace BrainsAndBacchanal
             else
             {
                 GUILayout.BeginHorizontal();
-                DrawRoomPanel(snapshot);
+                DrawRoomPanel(snapshot, game);
                 GUILayout.Space(24);
                 DrawPlayersPanel(snapshot);
+                GUILayout.Space(24);
+                DrawEnginePanel(snapshot, game);
                 GUILayout.EndHorizontal();
             }
 
@@ -411,7 +502,7 @@ namespace BrainsAndBacchanal
             GUI.enabled = true;
         }
 
-        private void DrawRoomPanel(LobbySnapshot snapshot)
+        private void DrawRoomPanel(LobbySnapshot snapshot, HostGameSnapshot game)
         {
             GUILayout.BeginVertical(GUILayout.Width(330));
 
@@ -463,7 +554,21 @@ namespace BrainsAndBacchanal
                 _ = SubmitHostIntentAsync(RoomIntents.UnlockTeams, "{}");
             }
 
+            GUILayout.Space(8);
+
+            // START GAME. Enabled only once teams are locked and no game is
+            // running — the server enforces both regardless, but a disabled
+            // button is a better explanation than a rejection.
+            var gameRunning = game != null && game.GameRunning;
+            GUI.enabled = !_busy && room.teamsLocked && !gameRunning;
+            if (GUILayout.Button(gameRunning ? "GAME RUNNING" : "START GAME", GUILayout.Height(40)))
+            {
+                _ = SubmitGameIntentAsync(GameIntents.StartGame, "{}");
+            }
+            GUI.enabled = true;
+
             GUILayout.Space(4);
+            GUI.enabled = !_busy;
             if (GUILayout.Button("Close Room"))
             {
                 _ = SubmitHostIntentAsync(RoomIntents.CloseRoom, "{}");

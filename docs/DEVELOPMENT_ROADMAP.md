@@ -94,23 +94,26 @@ Not included, deliberately: durable room storage (in-memory only — a server
 restart destroys active rooms), lobby auto-pause (no gameplay to pause yet), any
 disconnect timeout, and any rule for a mid-game Host disconnect.
 
-## Phase 5 — Generic Authoritative Engine ◀ NEXT
+## Phase 5 — Generic Authoritative Engine ✅ COMPLETE
 
-Build:
-- BB ledger,
+Built:
+- BB ledger (floor at zero, full history),
 - timer service,
-- challenge state,
-- turn ownership,
+- generic challenge state and lifecycle,
+- turn ownership and the active-player model,
 - Host judgment commands,
 - generic results,
-- pause/resume,
-- snapshots,
-- event history,
-- recovery commands.
+- production auto-pause on an active player's disconnect (D-011),
+- split Host/player game snapshots,
+- event history and reconnect recovery.
 
-Avoid unresolved round-specific rules.
+All implemented. See `docs/GAME_ENGINE.md`.
 
-## Phase 6 — Shared Systems
+Not included, deliberately: durable storage (in memory only — a server restart
+now destroys balances and the ledger as well as the room), any round, and any
+rule for a mid-game Host disconnect. Nothing in `OPEN_RULES.md` was resolved.
+
+## Phase 6 — Shared Systems ◀ NEXT
 
 Build:
 - Bacchanal Cards,

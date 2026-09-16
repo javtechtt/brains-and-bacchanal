@@ -29,11 +29,33 @@ QR, list players as they join, build teams, lock them.
 
 | Check | Result |
 |---|---|
-| C# compilation (batch mode) | **PASS** — 0 errors |
+| C# compilation (batch mode) | **PASS** — 0 errors, 0 warnings |
 | Headless lobby check vs live compiled server | **PASS — 47/47** |
-| IL2CPP Windows standalone build | **PASS** — 0 errors, 0 warnings, 2m23s |
+| **Headless ENGINE check vs live compiled server** | **PASS — 49/49** |
+| IL2CPP Windows standalone build | **PASS** — 0 errors, 0 warnings |
 | Standalone `.exe` runs | **PASS** — no exceptions, clean D3D12 init |
 | QR decoded by a real scanner | **PASS — 307/307** (`tools/qr-verify/`) |
+
+### The engine check exists because JsonUtility fails quietly
+
+`HeadlessEngineCheck.cs` (Phase 5) drives a whole generic game through the real
+C# DTOs against the real compiled server: START_GAME, starting BB, a generic
+challenge, turn and active player, a timer, the D-011 auto-pause, reconnect,
+Host-only resume, a Host ruling, resolution through the ledger, the floor at
+zero, and Host reconnect to the *same* game.
+
+It is not redundant with the TypeScript tests. **JsonUtility does not throw on a
+field mismatch** — it deserialises to zero or null. A drifted DTO would show up
+as "0 BB" on a television in front of a room of people, not as an error. The only
+way to catch that is to read real server JSON through the real DTOs and assert
+the values, which is what this check does.
+
+```
+Unity.exe -batchmode -quit -nographics -projectPath unity/host   -executeMethod BrainsAndBacchanal.EditorTools.HeadlessEngineCheck.Run
+```
+
+The server must be running with `GAME_SERVER_DEV_TOOLS=1` for the BB-floor check;
+it is skipped, not failed, when development tools are off.
 
 `HeadlessLobbyCheck.cs` runs the SAME client, DTOs and QR encoder the scene uses,
 against the real production server. It covers room creation, the join flow,
@@ -62,6 +84,28 @@ penalty rule, and mask 2 producing valid-but-poorly-scanning codes (D-020).
 only its `RoomId` differs. Writing a second client would have discarded the
 29/29 evidence that justified D-014 and doubled the hand-rolled ack-correlation
 code that decision already counts as its ongoing cost.
+
+### The Phase 5 engine test panel
+
+`HostEnginePanel.cs` is a **separate partial class**, deliberately: it is
+development-only tooling, and keeping it out of `HostLobby.cs` means that is
+obvious at a glance and that deleting it later touches nothing else.
+
+It shows game status, phase, team balances, the current challenge, turn, active
+players, the timer, the pause state and the last event; and it offers Start Game,
+phase moves, prepare/begin/review/resolve, set turn, set active player, start and
+cancel a timer, Host VALID/INVALID/WINNER rulings, resume, and development BB
+adjustments.
+
+**None of it ships.** Everything is labelled `[DEV]`, the BB controls are hidden
+entirely when the server reports `devToolsEnabled: false`, and the real Host
+presentation is Phase 8.
+
+`_game` is captured **once** at the top of `OnGUI`, exactly as `_snapshot` is and
+for the same reason — see the IMGUI Layout/Repaint note below. It matters more
+here: game state changes far more often than the lobby roster (every BB award,
+every turn, every timer event), so an uncaptured read would hit the mismatch
+routinely rather than rarely.
 
 ### Not yet done
 

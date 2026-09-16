@@ -35,6 +35,19 @@ export interface RoomServiceOptions {
   readonly capacity: number;
   /** Public base URL for join links and QR codes. */
   readonly publicBaseUrl: string;
+  /** Whether rooms accept development engine controls. See config.ts. */
+  readonly devTools?: boolean;
+  /**
+   * How often to check for an expired timer, in milliseconds.
+   *
+   * @bb/game-rules owns no wall clock — ESLint bans setTimeout there — so the
+   * expiry of a deadline is observed rather than scheduled. Most expiries are
+   * noticed immediately, because a Host or phone acts around the same moment;
+   * this tick exists for the case where nobody does, which is exactly what a
+   * timer running out looks like. 250 ms is well inside what a person perceives
+   * as instant and costs nothing at party scale.
+   */
+  readonly tickMs?: number;
 }
 
 export interface RoomService {
@@ -60,6 +73,7 @@ export function createRoomService(
     mintToken,
     mintId: () => randomUUID(),
     capacity: options.capacity,
+    devTools: options.devTools ?? false,
   });
 
   /** connectionId -> the room it belongs to. A connection serves one room. */
@@ -200,11 +214,48 @@ export function createRoomService(
     }
   });
 
+  /**
+   * Announce timer expiries that nothing else revealed.
+   *
+   * @bb/game-rules cannot schedule anything — it has no wall clock by design —
+   * so the process that does own one asks each room whether a deadline has
+   * passed. `Room#tick` reports at most once per timer, so this is cheap and
+   * idempotent: on a quiet server it walks a handful of rooms and returns
+   * nothing.
+   *
+   * `unref` so a pending tick never holds the process open during shutdown.
+   */
+  let ticker: NodeJS.Timeout | null = null;
+  const tickMs = options.tickMs ?? 250;
+
+  function tick(): void {
+    for (const room of store.all()) {
+      try {
+        deliver(room, room.tick());
+      } catch (error) {
+        // One room's fault must not stop every other room's timers.
+        logger.error({ err: error, roomId: room.roomId }, 'room tick failed');
+      }
+    }
+  }
+
   return {
     store,
     transport,
-    start: () => transport.start(),
-    stop: () => transport.stop(),
+
+    async start(): Promise<void> {
+      await transport.start();
+      ticker = setInterval(tick, tickMs);
+      ticker.unref();
+    },
+
+    async stop(): Promise<void> {
+      if (ticker !== null) {
+        clearInterval(ticker);
+        ticker = null;
+      }
+      await transport.stop();
+    },
   };
 }
 

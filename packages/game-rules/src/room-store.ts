@@ -59,6 +59,13 @@ export interface RoomStoreOptions {
   readonly capacity?: number;
   /** Maximum simultaneous rooms. Guards against unbounded memory growth. */
   readonly maxRooms?: number;
+  /**
+   * Whether rooms accept development engine controls (Phase 5 spec §17).
+   *
+   * Off unless the server explicitly enables it, so the default is the safe
+   * one and a production deployment cannot acquire the tooling by omission.
+   */
+  readonly devTools?: boolean;
 }
 
 export const DEFAULT_ROOM_CAPACITY = 24;
@@ -96,6 +103,7 @@ export class InMemoryRoomStore implements RoomStore {
       capacity: this.#options.capacity ?? DEFAULT_ROOM_CAPACITY,
       mintToken: this.#options.mintToken,
       mintPlayerId: this.#options.mintId,
+      devTools: this.#options.devTools ?? false,
     });
 
     this.#rooms.set(roomId, room);

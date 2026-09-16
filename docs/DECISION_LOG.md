@@ -176,3 +176,59 @@ it fail identically.
 Mask choice is a robustness heuristic, not a correctness requirement, and the
 other seven masks always include a good one. Verified by decoding, not
 inspection: `tools/qr-verify/` decodes **307/307**.
+
+## D-021 — "Active Player" Means Required by the Current Challenge
+D-011 pauses gameplay when an **active** player disconnects. Phase 5 had to say
+operationally who that is, without inventing a game rule.
+
+**An active player is one whose participation the current challenge requires.**
+It is set deliberately by the engine (`HOST_SET_ACTIVE_PLAYERS`), never inferred
+from who happens to be connected.
+
+Chosen over "everyone in the room", which was the only other reading available
+without deciding round rules. At a party most of the room is watching at any
+moment; pausing every time a spectator's phone sleeps would stop the game
+constantly, and the Host would learn to ignore the pause — which would defeat
+D-011 precisely when it mattered.
+
+This is engineering, not a game rule. Later rounds decide who is active by
+nominating an answerer, passing control, or opening a challenge to a team.
+See `docs/GAME_ENGINE.md`.
+
+## D-022 — Timer Expiry Decides Nothing
+When a server-owned deadline runs out, the engine emits `TIMER_EXPIRED`, moves
+the challenge to `HOST_REVIEW`, and **stops**.
+
+It does **not** mean a wrong answer, a lost turn, a forfeited question or any
+BB change. No locked rule says a timeout means any of those, and different
+challenges will almost certainly differ — Family Feud's clock and Guess the
+Logo's 10-second window are not the same kind of deadline.
+
+The event payload says `requiresHostDecision: true` on the wire, so no client
+invents a consequence either.
+
+Phases 6–7 give expiry a meaning per challenge, once those rules are decided.
+
+## D-023 — One Event Sequence for Lobby and Gameplay
+The `GameEngine` shares the room's `EventLog` rather than keeping its own.
+
+A client must be able to order "Team A reached 1,500 BB" against "Javal
+disconnected". Two independent counters cannot express that, and a gap in either
+would stop reliably meaning "you missed a state change" — which is the whole
+value of the sequence number.
+
+Cost: the engine holds a reference to the room's log, so they are not entirely
+independent objects. Accepted, because the alternative is clients merging two
+streams with no defined interleaving.
+
+## D-024 — Development BB Controls Are Gated by the Server, Not the Client
+`DEV_ADJUST_BB` exists so the ledger and its floor can be exercised before any
+round awards BB (Phase 5 spec §17).
+
+It is refused **by the server** unless started with development tools enabled —
+default on in development, **off** in production. Hiding the button in a client
+would not have been enough: the intent travels over an open socket, and a room
+is deliberately not gated by a shared secret (see `docs/LOBBY.md`).
+
+Every entry it writes is stamped `dev_adjustment` in the ledger, so a test award
+can never be mistaken for earned BB when reading a game's history.

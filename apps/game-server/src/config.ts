@@ -34,6 +34,23 @@ export interface ServerConfig {
   readonly publicBaseUrl: string;
   /** Maximum players per room. See docs/LOBBY.md for the default's reasoning. */
   readonly roomCapacity: number;
+  /**
+   * Whether development engine controls are accepted.
+   *
+   * Phase 5 spec §17 needs a harness that can move BB directly to prove the
+   * ledger and its floor before any round exists. That must not exist in a real
+   * game, so it is gated here: with this off, the server refuses DEV_ADJUST_BB
+   * whatever a client sends.
+   *
+   * Defaults to ON in development and OFF otherwise, so a deployment has to opt
+   * in rather than remember to opt out.
+   */
+  readonly devTools: boolean;
+}
+
+function readBoolean(raw: string | undefined, fallback: boolean): boolean {
+  if (raw === undefined || raw === '') return fallback;
+  return raw === '1' || raw.toLowerCase() === 'true';
 }
 
 function readCapacity(raw: string | undefined, fallback: number): number {
@@ -54,5 +71,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     contentSource: env['CONTENT_SOURCE'] ?? 'test-only',
     publicBaseUrl: (env['PUBLIC_BASE_URL'] ?? '').replace(/\/+$/, ''),
     roomCapacity: readCapacity(env['GAME_SERVER_ROOM_CAPACITY'], 24),
+    devTools: readBoolean(
+      env['GAME_SERVER_DEV_TOOLS'],
+      (env['NODE_ENV'] ?? 'development') !== 'production',
+    ),
   };
 }

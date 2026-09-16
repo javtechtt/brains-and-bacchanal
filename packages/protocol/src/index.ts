@@ -11,8 +11,16 @@
  * protocol knows nothing about transports.
  *
  * Phase 2 scope: version, identifiers, envelopes, rejections, lifecycle
- * phases, generic domain models and the snapshot shape. Concrete intent and
- * event types belong to the phases that implement those behaviours.
+ * phases, generic domain models and the snapshot shape.
+ *
+ * Phase 4 added the production lobby (room.ts): rooms, players, teams and
+ * reconnect. Phase 5 adds the generic game engine (game.ts): game start, the BB
+ * ledger, generic challenges, turn ownership, timers, Host rulings and the
+ * split Host/player game snapshots.
+ *
+ * Round-specific intents and events — cards, Clash, Market, Maco Mail, wagers,
+ * the buzzer — still belong to the phases that implement those behaviours, and
+ * several depend on rules open in docs/OPEN_RULES.md.
  */
 
 export * from './version.js';
@@ -23,6 +31,7 @@ export * from './lifecycle.js';
 export * from './models.js';
 export * from './room.js';
 export * from './room-code.js';
+export * from './game.js';
 export * from './snapshot.js';
 export * from './transport.js';
 export * from './benchmark.js';

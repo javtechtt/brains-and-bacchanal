@@ -173,9 +173,21 @@ from.
 Authority is checked *inside* `applyTransition`, not at a call site, so there is
 no route by which a future caller can bypass it.
 
-Phase 2 implements the state model. **Network disconnect detection is not
-implemented** — nothing yet triggers `player_disconnect` automatically. The
-reason code exists for the later phase that adds detection.
+Phase 2 implemented the state model. **Phase 5 wires it to the real game**:
+`GameEngine` owns the phase, every change goes through `applyTransition`, and an
+active player's disconnect now triggers `player_disconnect` automatically in the
+production room path. See `docs/GAME_ENGINE.md`.
+
+### Gameplay cannot slip past a pause
+
+The table already refuses an ordinary `advance` out of `PAUSED`. But several
+engine actions change state **without** a phase transition — resolving a
+challenge moves BB, a ruling is recorded, a turn is reassigned. Phase 5 routes
+those through one shared guard so they are refused while paused too.
+
+That was a real bug, caught by a test: before the guard, a Host could resolve a
+challenge and award BB while the game was paused for a player whose phone had
+died.
 
 ## Deadlines
 
@@ -207,6 +219,10 @@ It deliberately contains no board, no strike count, no answer pool, no logo
 list and no scoring. `challengeType` is a plain `string` rather than a union,
 because fixing the set now would imply decisions about round composition that
 `OPEN_RULES.md` §1 leaves open.
+
+Phase 5 implements its lifecycle — prepare, begin, review, resolve — and adds
+turn ownership, an active-player set and recorded Host rulings, all still without
+knowing what any challenge *is*. `docs/GAME_ENGINE.md`.
 
 ## What intentionally remains undefined
 

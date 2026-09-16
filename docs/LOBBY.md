@@ -3,8 +3,8 @@
 Phase 4. How a party actually starts: a Host creates a room, phones scan a code,
 the Host builds teams, and teams lock.
 
-> **Status: implemented.** No gameplay. The lobby ends at a locked set of teams;
-> starting a game is Phase 5.
+> **Status: implemented.** The lobby ends at a locked set of teams. Starting a
+> game from there is Phase 5 — see `docs/GAME_ENGINE.md`.
 
 ---
 
@@ -213,9 +213,12 @@ the same way, so a removed player cannot reconnect back in.
 ### Lobby disconnects do not pause anything
 
 D-011 auto-pauses gameplay when an active player disconnects. **That rule does
-not apply in the lobby**, because there is no gameplay to pause. Phase 5 wires it
-when there is something to protect; the mechanism is already proven in the
-benchmark session.
+not apply in the lobby**, because there is no gameplay to pause.
+
+**Phase 5 wired it for the real game.** Once a game is running, an *active*
+player's disconnect pauses automatically and freezes the timer; a non-active
+player's does not, and a lobby disconnect still does not. See
+`docs/GAME_ENGINE.md`.
 
 ---
 
@@ -259,9 +262,11 @@ intents rather than by hiding state.
 Per-recipient fields are `you` (which listed player you are) and `isHost`.
 Neither is a secret.
 
-**This will need to split in Phase 5+**, when there is something secret —
-unrevealed answers, another team's card hand (`CONTENT_POLICY.md`). The split is
-deferred until there is something to split.
+**Phase 5 split it.** The lobby snapshot stays as it is; the *game* snapshot is
+two separate types, `HostGameSnapshot` and `PlayerGameSnapshot`. The split landed
+before there was anything secret to put on the wrong side of it, which is the
+point — a Phase 6 field (a card hand, a hidden Market basket) now has to be
+placed deliberately. See `docs/GAME_ENGINE.md`.
 
 No snapshot ever contains a reconnect credential or the Host token.
 

@@ -1,16 +1,32 @@
 # unity/host — Host Display
 
-**Placeholder. No Unity project has been created yet.**
+**A real Unity project. Functional, deliberately unstyled.**
 
 ## Status
 
-Phase 1 establishes this folder only. The Unity project itself belongs to
-**Phase 8 — Unity Presentation / Tutorials**, which
-[docs/DEVELOPMENT_ROADMAP.md](../../docs/DEVELOPMENT_ROADMAP.md) places *after*
-the game logic works.
+The project exists and works: it creates a room, shows a scannable QR code,
+manages teams, starts a game, and drives the Phase 5 generic engine through a
+development test panel.
 
-Creating a Unity project requires the Unity Editor and would produce a large
-amount of generated scaffolding with nothing yet to render.
+It is a **functional networking and engine test screen, not the presentation**.
+IMGUI only — no artwork, animation, sound or branded layout.
+[docs/DEVELOPMENT_ROADMAP.md](../../docs/DEVELOPMENT_ROADMAP.md) places all of
+that in **Phase 8**, after the game logic works. Building it now would mean
+rebuilding it then.
+
+Full detail, including the Unity version, the headless checks and the IL2CPP
+build: [docs/UNITY_HOST.md](../../docs/UNITY_HOST.md).
+
+## Layout
+
+| File | Purpose |
+|---|---|
+| `Assets/Scripts/HostLobby.cs` | Room creation, QR, roster, teams, Start Game |
+| `Assets/Scripts/HostEnginePanel.cs` | **Development only** — Phase 5 engine test panel |
+| `Assets/Scripts/Protocol/` | Hand-written C# DTOs mirroring `packages/protocol` |
+| `Assets/Scripts/Net/` | `ClientWebSocket` transport (D-014) |
+| `Assets/Scripts/Util/QrCode.cs` | Hand-written QR encoder, verified by decoding |
+| `Assets/Editor/Headless*Check.cs` | End-to-end checks against the real server |
 
 ## What this will become
 

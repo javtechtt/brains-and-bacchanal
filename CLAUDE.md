@@ -211,22 +211,32 @@ After each major task, report:
 
 ## Current Phase
 
-**Phases 1–4 are complete.**
+**Phases 1–5 are complete.**
 
 - Phase 1 — Project Foundation
 - Phase 2 — Protocol + Generic Game State
 - Phase 3 — Realtime Transport Comparison (closed: raw WebSockets, D-014)
 - Phase 4 — Rooms, Players, Teams & Reconnect (`docs/LOBBY.md`)
+- Phase 5 — Generic Authoritative Engine (`docs/GAME_ENGINE.md`)
 
-Next is **Phase 5 — Generic Authoritative Engine** from
-`docs/DEVELOPMENT_ROADMAP.md`. **Do not begin it without the project owner
-asking.**
+Next is **Phase 6 — Shared Systems** from `docs/DEVELOPMENT_ROADMAP.md`.
+**Do not begin it without the project owner asking.**
 
 Do not jump ahead to full gameplay.
 
 Do not build production content.
 
 Do not finalize any rule listed in `docs/OPEN_RULES.md`.
+
+### Phase 5 leaves these deliberately undecided
+
+The engine is generic on purpose. It does not define any challenge duration, does
+not give timer expiry a meaning (D-022: a timeout is **not** a wrong answer), does
+not constrain `challengeType`, and does not decide what a round contains. Phase 6
+and 7 supply those from locked rules — not from the engine's shape.
+
+The mid-game **Host disconnect** rule is still open: connection loss is recorded
+and play is left exactly as it was.
 
 ### Standing note on Maco! (OPEN_RULES.md §7)
 

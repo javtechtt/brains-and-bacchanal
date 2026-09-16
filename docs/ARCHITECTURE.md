@@ -103,6 +103,12 @@ Server validates and emits resulting events.
 
 Never trust a client to directly mutate BB, inventory, timers, or winner state.
 
+Phase 5 implements this for the game engine. BB moves **only** through
+`BbLedger`, which is also where the floor-at-zero rule lives — once, rather than
+scattered through round code. Timers are server-owned; a client may interpolate a
+countdown for display but never decides expiry. Turn ownership is assigned only
+by the server. See `docs/GAME_ENGINE.md`.
+
 ## 5. Event Log
 
 Accepted state changes should record:
@@ -161,10 +167,17 @@ Production room socket: `/room/ws`. Benchmark: `/benchmark/ws`.
 
 ## 8. Persistence
 
-**CURRENT REALITY: rooms live in memory only. Restarting the game server
-destroys every active room — codes, players, teams and reconnect credentials.**
+**CURRENT REALITY: rooms AND active games live in memory only. Restarting the
+game server destroys every active room — codes, players, teams and reconnect
+credentials — and since Phase 5, every active game as well: BB balances, the
+ledger, the challenge, the timer and the pause state.**
+
 There is no durable store yet. `RoomStore`
 (`packages/game-rules/src/room-store.ts`) is the seam where one goes.
+
+Phase 5 raised the stakes without changing the mechanism, deliberately (its spec
+§31 forbids reaching for Redis or Postgres yet). What it means in practice: do
+not restart the server during a game, because the scores go with it.
 
 Recommended later:
 - PostgreSQL / Neon.

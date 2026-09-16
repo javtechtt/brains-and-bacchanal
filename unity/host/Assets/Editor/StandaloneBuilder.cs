@@ -95,7 +95,37 @@ namespace BrainsAndBacchanal.EditorTools
                 }
             }
 
-            Debug.Log($"[BBBUILD] exeExists={File.Exists(exePath)}");
+            // Report the .exe's AGE, not merely that a file is sitting there.
+            //
+            // A failed build leaves the previous build's .exe in place, so a bare
+            // "exeExists=True" on a failed build reads like partial success and
+            // is actively misleading — it cost real debugging time once already.
+            // Worse, IL2CPP often does not rewrite the launcher .exe even on a
+            // SUCCESSFUL rebuild, because the compiled game code lives in
+            // GameAssembly.dll and the il2cpp metadata rather than the launcher.
+            // So the .exe timestamp alone proves nothing either way; these three
+            // lines together are what actually tell you what you just built.
+            if (File.Exists(exePath))
+            {
+                Debug.Log($"[BBBUILD] exe={exePath} writtenUtc={File.GetLastWriteTimeUtc(exePath):O}");
+
+                var assembly = Path.Combine(Path.GetDirectoryName(exePath) ?? ".", "GameAssembly.dll");
+                if (File.Exists(assembly))
+                {
+                    Debug.Log($"[BBBUILD] GameAssembly.dll writtenUtc={File.GetLastWriteTimeUtc(assembly):O} "
+                            + "(this, not the .exe, carries your C# changes under IL2CPP)");
+                }
+            }
+            else
+            {
+                Debug.Log("[BBBUILD] exe MISSING");
+            }
+
+            if (summary.result != BuildResult.Succeeded)
+            {
+                Debug.Log("[BBBUILD] BUILD FAILED — any .exe above is from an EARLIER build, not this one.");
+            }
+
             EditorApplication.Exit(summary.result == BuildResult.Succeeded ? 0 : 1);
         }
     }

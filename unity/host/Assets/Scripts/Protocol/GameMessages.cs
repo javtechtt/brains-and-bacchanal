@@ -242,6 +242,15 @@ namespace BrainsAndBacchanal.Protocol
         /// <summary>Whether this server accepts development engine controls.</summary>
         public bool devToolsEnabled;
 
+        /// <summary>
+        /// Phase 6 shared systems: cards, Clash, Market, advantages, Maco Mail,
+        /// deals and wagers. Null before the game starts.
+        ///
+        /// Broad, because the Host adjudicates — but still no Maco Mail deck
+        /// ORDER and no Clash response before the reveal.
+        /// </summary>
+        public HostSharedView shared;
+
         public bool GameRunning => game != null && !string.IsNullOrEmpty(game.gameId);
     }
 }

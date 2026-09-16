@@ -9,6 +9,7 @@ import type {
 import type { GamePhase } from './lifecycle.js';
 import type { ChallengeStatus, PauseReason } from './models.js';
 import type { LobbyPlayer, LobbyRoom, TeamMode } from './room.js';
+import type { HostSharedSystemsView, PlayerSharedSystemsView } from './shared-systems.js';
 
 /**
  * Production game protocol — Phase 5.
@@ -152,6 +153,22 @@ export const BB_CHANGE_REASONS = [
   'challenge_result',
   /** A Host ruling that moved BB directly. */
   'host_adjustment',
+
+  // --- Phase 6 shared systems ---------------------------------------------
+  // Each names a system rather than an amount. A Host reading a team's history
+  // must be able to tell a Market purchase from a Maco Mail penalty without
+  // matching numbers against a price list.
+  /** Spent in the Market. GAME_RULES_LOCKED.md §10. */
+  'market_purchase',
+  /** Refunded by Cancel Market Purchase — the ACTUAL price paid. §8. */
+  'market_refund',
+  /** A Maco Mail money outcome. §8. */
+  'maco_mail',
+  /** A Host Deal payout or payment. §9. */
+  'host_deal',
+  /** A resolved wager. §17. */
+  'wager',
+
   /** DEVELOPMENT ONLY. Never present in a real game. */
   'dev_adjustment',
 ] as const;
@@ -411,6 +428,16 @@ export interface HostGameSnapshot extends GameSnapshotBase {
   readonly ledger: readonly BbLedgerEntry[];
   /** Whether development engine controls are enabled on this server. */
   readonly devToolsEnabled: boolean;
+  /**
+   * Phase 6 shared systems, as the Host may see them.
+   *
+   * Broad — every hand, every purchase, every advantage — because the Host
+   * adjudicates. Still NOT the Maco Mail deck order, and still not a Clash
+   * response before the reveal; see shared-systems.ts.
+   *
+   * Null before the game starts.
+   */
+  readonly shared: HostSharedSystemsView | null;
 }
 
 /**
@@ -434,6 +461,18 @@ export interface PlayerGameSnapshot extends GameSnapshotBase {
   readonly youAreActive: boolean;
   /** Whether it is this player's turn, or their team's. */
   readonly yourTurn: boolean;
+  /**
+   * Phase 6 shared systems, as THIS PLAYER'S TEAM may see them.
+   *
+   * The secrecy-critical field. It carries the team's own hand, its own
+   * purchases, its own advantages and its own draws; opponents appear only as
+   * counts, and a Clash response appears only after the reveal.
+   * `PlayerSharedSystemsView` has no field capable of carrying an opponent's
+   * card, so this cannot leak one by mistake.
+   *
+   * Null before the game starts, and for a player with no team.
+   */
+  readonly shared: PlayerSharedSystemsView | null;
 }
 
 export type GameSnapshot = HostGameSnapshot | PlayerGameSnapshot;

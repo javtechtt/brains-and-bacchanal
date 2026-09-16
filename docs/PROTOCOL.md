@@ -18,9 +18,14 @@ generic challenges, turn ownership, timers, Host rulings and the split
 Host/player game snapshots. They are specified in **`docs/GAME_ENGINE.md`** and
 listed under [Phase 5 messages](#phase-5-messages-game-engine) below.
 
-Round-specific intents (`PLAY_CARD`, `PURCHASE_ITEM`, `BUZZ`, …) are still
-**not** defined. They belong to the phases that implement those behaviours, and
-several depend on rules still open in `OPEN_RULES.md`.
+Phase 6 adds the **shared systems** messages: Bacchanal cards and the Clash, the
+Market, held advantages, Maco Mail, Host Deals and the generic wager. They are
+specified in **`docs/SHARED_SYSTEMS.md`** and listed under
+[Phase 6 messages](#phase-6-messages-shared-systems) below.
+
+Round-specific intents (`BUZZ`, question allocation, a Family Feud board) are
+still **not** defined. They belong to Phase 7, and several depend on rules still
+open in `OPEN_RULES.md`.
 
 ## Transport independence
 
@@ -318,6 +323,72 @@ A timeout is **not** a wrong answer — D-022.
 
 Gameplay events share the room's `EventLog`, so a client can order a BB change
 against a disconnect. D-023.
+
+## Phase 6 messages (shared systems)
+
+Full behaviour is in `docs/SHARED_SYSTEMS.md`; this is the protocol-level
+summary.
+
+**Host-gated intents**
+
+| Intent | Notes |
+|---|---|
+| `HOST_DEAL_BACCHANAL_CARDS` | One card per category, per team. Separate from `START_GAME` |
+| `HOST_OPEN_CARD_WINDOW` | Names a `CardChallengeKind` — a row of the locked table |
+| `HOST_CLOSE_CARD_WINDOW` | |
+| `HOST_OPEN_MARKET` | Round 2, 3 or 4 only |
+| `HOST_CLOSE_MARKET` | Purchases reveal |
+| `HOST_DRAW_MACO_MAIL` | Caller states what future challenges remain |
+| `HOST_OFFER_DEAL` | Names a template. **Carries no amount** |
+| `HOST_RESOLVE_WAGER` | Won or lost, exactly once |
+
+**Player-gated intents** — a team acts for itself; the server validates
+everything.
+
+| Intent | Notes |
+|---|---|
+| `PLAY_BACCHANAL_CARD` | Opens a Clash |
+| `RESPOND_TO_CLASH` | Secret, inside the 3-second window |
+| `PURCHASE_MARKET_ITEM` | Affordability checked **before** deduction |
+| `USE_ADVANTAGE` | Goes through the shared stacking budget |
+| `RESPOND_TO_HOST_DEAL` | `accept` or `decline` — nothing else |
+| `PROPOSE_WAGER` | Capped at 50% of current BB |
+
+**Events**: `BACCHANAL_CARDS_DEALT`, `CARD_WINDOW_OPENED`, `CARD_WINDOW_CLOSED`,
+`BACCHANAL_CARD_PLAYED`, `CLASH_OPENED`, `CLASH_RESPONSE_RECEIVED`,
+`CLASH_RESOLVED`, `PART_DAT_FIGHT`, `CARD_EFFECT_APPLIED`,
+`BACCHANAL_IMMUNITY_TRIGGERED`, `MARKET_OPENED`, `MARKET_PURCHASE_RECORDED`,
+`MARKET_CLOSED`, `MARKET_ITEMS_EXPIRED`, `MACO_MAIL_DRAWN`,
+`MACO_MAIL_RESOLVED`, `ADVANTAGE_GRANTED`, `ADVANTAGE_USED`,
+`ADVANTAGE_EXPIRED`, `HELD_EFFECT_PLACED`, `HELD_EFFECT_CONSUMED`,
+`HOST_DEAL_OFFERED`, `HOST_DEAL_RESOLVED`, `WAGER_LOCKED`, `WAGER_RESOLVED`.
+
+### The acting team comes from the connection, never the payload
+
+No player handler reads a `teamId` a client supplied. Authority is resolved from
+the verified identity on the socket, exactly as `#requireHost` reads nothing from
+an intent. A phone cannot spend another team's BB by naming them.
+
+### Two events exist purely for secrecy
+
+`CLASH_RESPONSE_RECEIVED` announces **that** a team responded without saying with
+what. `MARKET_PURCHASE_RECORDED` does the same for a purchase. In both cases the
+content reaches only the acting team, in its own acknowledgement, and everyone
+else at the reveal.
+
+### No Host Deal amount exists on the wire
+
+`GAME_RULES_LOCKED.md` §9 — deal mathematics come from server-side templates. The
+intent carries a template name and, for `RESPOND_TO_HOST_DEAL`, `accept` or
+`decline`. A rogue amount in a payload changes nothing because no handler reads
+one.
+
+### The snapshots gain one field each
+
+`HostGameSnapshot.shared` and `PlayerGameSnapshot.shared` — separate types, so a
+new field must be placed deliberately on one side. `PlayerSharedSystemsView` has
+**no field capable of carrying an opponent's card**, which is the protection
+rather than a rule someone must remember.
 
 ## Event history
 

@@ -174,7 +174,25 @@ export default function JoinPage() {
 
   // The game view wins while a game is running; the lobby is what comes before.
   if (game !== null && game.game !== null) {
-    return <PlayerGame snapshot={game} status={status} />;
+    return (
+      <PlayerGame
+        snapshot={game}
+        status={status}
+        // Phase 6: a team acts on its own behalf — a card, a purchase, a deal
+        // answer, a wager. The server still decides every one of them; this only
+        // carries the request. After it lands, the snapshot is refreshed so the
+        // phone renders the SERVER's new state rather than assuming its own.
+        submit={async (type, payload) => {
+          const client = clientRef.current;
+          if (client === null) return { ok: false, message: 'Not connected.' };
+          const ack = await client.submit(type, payload);
+          await client.refreshGameSnapshot();
+          return ack.ok
+            ? { ok: true }
+            : { ok: false, message: ack.error.message };
+        }}
+      />
+    );
   }
 
   if (snapshot !== null) {

@@ -224,6 +224,34 @@ Phase 5 implements its lifecycle — prepare, begin, review, resolve — and add
 turn ownership, an active-player set and recorded Host rulings, all still without
 knowing what any challenge *is*. `docs/GAME_ENGINE.md`.
 
+### Phase 6 adds two state machines beside it, not inside it
+
+Neither is a game phase, and both are deliberately scoped smaller than one:
+
+```text
+CARD LIFECYCLE
+HELD ──play──▶ PENDING ──survives──▶ RESOLVING ──▶ CONSUMED
+                 │
+                 └──loses / Part Dat Fight──▶ HELD (barred for this challenge)
+
+CLASH
+open ──(3s hidden window, pausable)──▶ reveal ──▶ uncontested | winner | part_dat_fight
+```
+
+The Clash window is a `Deadline`, so it pauses with the game exactly as the
+challenge timer does (D-011) and is **polled**, not scheduled — `@bb/game-rules`
+owns no wall clock.
+
+**Per-challenge state resets when a challenge is prepared or resolved.** The
+one-card-per-team bar (`GAME_RULES_LOCKED.md` §2) and the advantage budgets (§4,
+§10) are scoped to a question; carrying them forward would silently deny a team
+its card or its one retry in the next challenge. Hands, held advantages and
+Market purchases are game-long and survive.
+
+**Round expiry happens on entry to `ROUND_INTRO`.** §10 expires Market items
+after the round that follows their purchase; Maco Mail advantages are skipped,
+per §7. See `docs/SHARED_SYSTEMS.md`.
+
 ## What intentionally remains undefined
 
 Phase 2 does **not** decide, and must not be read as deciding:
@@ -240,8 +268,11 @@ Phase 2 does **not** decide, and must not be read as deciding:
 - Round 4 / Sudden Death timers (§11)
 - `Partner, I Sorry` with insufficient BB (§12)
 
-Also deferred by phase, not by open rule: rounds, Bacchanal Cards, Clash, the
-Market, Maco Mail, Host Deals, wagers, the buzzer and the BB ledger.
+Also deferred by phase, not by open rule: rounds and the buzzer. (The BB ledger
+arrived in Phase 5; Bacchanal Cards, the Clash, the Market, Maco Mail, Host Deals
+and wagers arrived in Phase 6 — **without** resolving any of the open rules
+above. §7, §8 and §12 visibly shaped what was built: see
+`docs/SHARED_SYSTEMS.md`.)
 
 Phase 4 has since implemented disconnect detection and room-scoped credentials
 (`docs/LOBBY.md`). It deliberately did **not** implement:

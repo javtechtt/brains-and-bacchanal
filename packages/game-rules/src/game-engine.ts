@@ -2,10 +2,17 @@ import {
   asChallengeId,
   asServerTimestamp,
   asTeamId,
+  CARD_CHALLENGE_KINDS,
   err,
   GAME_EVENTS,
+  HOST_DEAL_TEMPLATES,
+  MARKET_ITEMS,
   ok,
+  PLUS_15_SECONDS_MS,
   rejection,
+  type CardChallengeKind,
+  type HostDealTemplate,
+  type MarketItem,
   type BbChangeReason,
   type BbLedgerEntry,
   type ChallengeId,
@@ -32,6 +39,9 @@ import {
 import { BbLedger } from './bb-ledger.js';
 import type { Clock } from './clock.js';
 import type { EventLog } from './event-log.js';
+import type { Rng } from './rng.js';
+import { SystemRng } from './rng.js';
+import { SharedSystems } from './shared-systems.js';
 import { TimerService } from './timer-service.js';
 import { applyTransition, type PhaseState } from './transitions.js';
 
@@ -84,6 +94,15 @@ export interface GameEngineOptions {
    * physically cannot accept DEV_ADJUST_BB, however a client is built.
    */
   readonly devTools: boolean;
+  /**
+   * Source of randomness for the Phase 6 shared systems.
+   *
+   * Injected for the same reason the Clock is: a card deal, a Maco Mail shuffle
+   * and a Card Confiscation all decide something players will argue about, and a
+   * test that cannot fix them cannot assert anything about them. Defaults to
+   * real randomness so production callers need not think about it.
+   */
+  readonly rng?: Rng;
 }
 
 /** A team as the engine needs it at game start. Supplied by the room. */
@@ -105,6 +124,17 @@ export class GameEngine {
   readonly #log: EventLog;
   readonly #ledger: BbLedger;
   readonly #timer: TimerService;
+  /**
+   * The Phase 6 shared systems: cards, Clash, Market, advantages, Maco Mail,
+   * Host Deals and wagers.
+   *
+   * Held by the engine rather than beside it because every one of them moves BB
+   * through the SAME ledger, and several key on the challenge and pause state
+   * the engine owns. Keeping them here is what makes "a purchase cannot happen
+   * while the game is paused" a single guard rather than a rule each subsystem
+   * must remember.
+   */
+  readonly #shared: SharedSystems;
 
   #started = false;
   #gameId: string | null = null;
@@ -136,6 +166,24 @@ export class GameEngine {
     this.#log = options.log;
     this.#ledger = new BbLedger(options.clock, options.mintId);
     this.#timer = new TimerService(options.clock, options.mintId);
+    this.#shared = new SharedSystems({
+      clock: options.clock,
+      rng: options.rng ?? new SystemRng(),
+      mintId: options.mintId,
+      ledger: this.#ledger,
+    });
+  }
+
+  /**
+   * The Phase 6 shared systems.
+   *
+   * Exposed for the room to route intents to, and for tests. Every mutating
+   * path through it is still gated by the engine's own guards — see the
+   * `shared*` methods below, which is where pause, phase and challenge
+   * preconditions are applied before a subsystem is touched.
+   */
+  get shared(): SharedSystems {
+    return this.#shared;
   }
 
   // -------------------------------------------------------------------------
@@ -329,13 +377,31 @@ export class GameEngine {
     // Entering a round intro means a new round. The index is a generic counter
     // for presentation and logs; it decides nothing about what the round
     // contains, which is Phase 7's and still partly open.
+    let expired: ReturnType<SharedSystems['endRound']> | null = null;
     if (to === 'ROUND_INTRO' && previous !== 'ROUND_INTRO') {
+      // GAME_RULES_LOCKED.md §10 — Market items "expire after the immediately
+      // following round". The round that just finished is the one now ending,
+      // so anything bought before it (or earlier) is spent.
+      //
+      // Maco Mail held advantages are NOT touched: §7 keeps them until used or
+      // the game ends, and Advantages.expireAfterRound skips them by source.
+      expired = this.#shared.endRound(this.#roundIndex);
       this.#roundIndex += 1;
     }
 
     return ok({
       type: GAME_EVENTS.PHASE_CHANGED,
-      payload: { phase: to, previousPhase: previous, roundIndex: this.#roundIndex },
+      payload: {
+        phase: to,
+        previousPhase: previous,
+        roundIndex: this.#roundIndex,
+        ...(expired === null
+          ? {}
+          : {
+              expiredPurchaseIds: expired.purchases.map((p) => p.purchaseId),
+              expiredAdvantageIds: expired.advantages.map((a) => a.advantageId),
+            }),
+      },
     });
   }
 
@@ -394,6 +460,11 @@ export class GameEngine {
     this.#turn = NO_TURN;
     this.#activePlayers.clear();
     this.#timer.cancel();
+    // The same reasoning extends to Phase 6: the per-challenge card bar
+    // (GAME_RULES_LOCKED.md §2) and the advantage budgets (§4, §10) are scoped
+    // to a question. Carrying them into the next challenge would silently deny
+    // a team its card or its one retry.
+    this.#shared.endChallenge();
 
     return ok({
       type: GAME_EVENTS.CHALLENGE_PREPARED,
@@ -609,6 +680,9 @@ export class GameEngine {
     this.#activePlayers.clear();
     this.#turn = NO_TURN;
     this.#timer.cancel();
+    // Per-challenge card and advantage budgets end with the challenge. Hands,
+    // held advantages and Market purchases survive — they are game-long.
+    this.#shared.endChallenge();
 
     const moved = applyTransition(this.#phase, { kind: 'advance', to: 'RESULT' }, {
       kind: 'host',
@@ -845,6 +919,9 @@ export class GameEngine {
     this.#pausedAt = this.#clock.now();
     this.#pausedByPlayerId = pausedByPlayerId;
     this.#timer.pause();
+    // The Clash's 3-second window is a deadline like any other: a team must not
+    // lose its chance to counter because someone's phone died. D-011.
+    this.#shared.clash.pause();
 
     return ok({
       type: GAME_EVENTS.GAME_PAUSED,
@@ -881,6 +958,7 @@ export class GameEngine {
     // The timer picks up with exactly the time it had — the paused stretch is
     // banked and excluded from elapsed time.
     this.#timer.resume();
+    this.#shared.clash.resume();
 
     return ok({
       type: GAME_EVENTS.GAME_RESUMED,
@@ -970,6 +1048,408 @@ export class GameEngine {
   }
 
   // -------------------------------------------------------------------------
+  // Phase 6 — shared systems
+  //
+  // Each method here applies the ENGINE's preconditions (started, not paused,
+  // a challenge where one is required) and then delegates the RULE to the
+  // subsystem. The split matters: pause is an engine concern and a card's
+  // eligibility is not, so neither has to know about the other.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Deal every team its starting Bacchanal hand. GAME_RULES_LOCKED.md §2.
+   *
+   * Separate from START_GAME deliberately. A Host may want to explain the cards
+   * before dealing them, and a deal that happened automatically at game start
+   * would be invisible in the event log's causal order.
+   */
+  dealBacchanalCards(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const teamIds = [...this.#teams.keys()].map((id) => asTeamId(id));
+    const dealt = this.#shared.cards.deal(teamIds);
+    if (!dealt.ok) return err(dealt.error);
+
+    return ok({
+      type: 'BACCHANAL_CARDS_DEALT',
+      payload: {
+        // COUNTS ONLY on the broadcast. The hands themselves reach each team
+        // through its own snapshot, never through an event every client sees.
+        teamCardCounts: Object.fromEntries(
+          Object.entries(dealt.value).map(([teamId, cards]) => [teamId, cards.length]),
+        ),
+      },
+    });
+  }
+
+  /**
+   * Open the card-play window for the current challenge.
+   *
+   * `challengeKind` maps the challenge onto a row of the locked compatibility
+   * table. A challenge must be running: cards are played INTO something.
+   */
+  openCardWindow(challengeKind: string): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const challenge = this.#challenge;
+    if (challenge === null || challenge.status === 'resolved') {
+      return err(rejection('WRONG_STATE', 'There is no live challenge to play cards into.'));
+    }
+
+    if (!isCardChallengeKind(challengeKind)) {
+      return err(
+        rejection('INVALID_REQUEST', 'Unknown challenge kind for card eligibility.', {
+          challengeKind,
+        }),
+      );
+    }
+
+    const opened = this.#shared.openCardWindow(challenge.challengeId, challengeKind);
+    if (!opened.ok) return err(opened.error);
+
+    return ok({
+      type: 'CARD_WINDOW_OPENED',
+      payload: {
+        challengeId: challenge.challengeId,
+        challengeKind,
+        window: this.#shared.cards.windowView(),
+      },
+    });
+  }
+
+  closeCardWindow(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    return ok({
+      type: 'CARD_WINDOW_CLOSED',
+      payload: { window: this.#shared.cards.closeWindow() },
+    });
+  }
+
+  /**
+   * A team plays a Bacchanal card, opening a Clash.
+   *
+   * THE ONE PLAYER-DRIVEN GAMEPLAY INTENT SO FAR. Authority is checked by the
+   * room (the connection must belong to this team); legality is checked by the
+   * card system; the pause guard is here.
+   */
+  playBacchanalCard(input: {
+    readonly teamId: TeamId;
+    readonly cardInstanceId: string;
+    readonly targetTeamId?: TeamId | null;
+  }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const challenge = this.#challenge;
+    if (challenge === null || challenge.status === 'resolved') {
+      return err(rejection('WRONG_STATE', 'There is no live challenge.'));
+    }
+    if (!this.#teams.has(input.teamId)) {
+      return err(rejection('NOT_FOUND', 'Unknown team.', { teamId: input.teamId }));
+    }
+
+    const played = this.#shared.playCard({
+      teamId: input.teamId,
+      cardInstanceId: input.cardInstanceId,
+      targetTeamId: input.targetTeamId ?? null,
+      challengeId: challenge.challengeId,
+      paused: this.paused,
+      allTeamIds: [...this.#teams.keys()].map((id) => asTeamId(id)),
+    });
+    if (!played.ok) return err(played.error);
+
+    return ok({
+      type: 'BACCHANAL_CARD_PLAYED',
+      payload: {
+        teamId: input.teamId,
+        // The played card IS public — §5 has opponents choosing a counter to it,
+        // which requires knowing what it is.
+        cardType: played.value.cardType,
+        challengeId: challenge.challengeId,
+        clash: this.#shared.clash.view(),
+      },
+    });
+  }
+
+  /** A team secretly counters during the 3-second window. */
+  respondToClash(input: {
+    readonly teamId: TeamId;
+    readonly cardInstanceId: string;
+    readonly targetTeamId?: TeamId | null;
+  }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const responded = this.#shared.respondToClash({
+      teamId: input.teamId,
+      cardInstanceId: input.cardInstanceId,
+      targetTeamId: input.targetTeamId ?? null,
+      paused: this.paused,
+    });
+    if (!responded.ok) return err(responded.error);
+
+    return ok({
+      type: 'CLASH_RESPONSE_RECEIVED',
+      payload: {
+        // WHO responded, never WITH WHAT. Phase 6 spec §42.
+        teamId: input.teamId,
+        respondedTeamIds: responded.value.respondedTeamIds,
+        clash: this.#shared.clash.view(),
+      },
+    });
+  }
+
+  /**
+   * Close the Clash window and reveal.
+   *
+   * Polled like timer expiry rather than scheduled, for the same reason: this
+   * package owns no wall clock. Returns null when no Clash is due to resolve.
+   */
+  pollClashResolution(): EngineChange | null {
+    if (!this.#started || this.paused) return null;
+    if (!this.#shared.clash.active) return null;
+    if (!this.#shared.clash.windowExpired() && !this.#shared.clash.allResponded()) return null;
+
+    const resolved = this.#shared.resolveClash();
+    if (!resolved.ok) return null;
+
+    const value = resolved.value;
+    return {
+      type: value.immunityTriggered
+        ? 'BACCHANAL_IMMUNITY_TRIGGERED'
+        : value.result.outcome === 'part_dat_fight'
+          ? 'PART_DAT_FIGHT'
+          : 'CLASH_RESOLVED',
+      payload: {
+        result: value.result,
+        effect: value.effect,
+        immunityTriggered: value.immunityTriggered,
+        immunityTeamId: value.immunityTeamId,
+      },
+    };
+  }
+
+  /** Open the Market before Round 2, 3 or 4. GAME_RULES_LOCKED.md §10. */
+  openMarket(round: number): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const opened = this.#shared.market.open_(round);
+    if (!opened.ok) return err(opened.error);
+
+    return ok({ type: 'MARKET_OPENED', payload: { market: opened.value } });
+  }
+
+  /** Close the Market. Purchases reveal. §10. */
+  closeMarket(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const closed = this.#shared.market.close();
+    if (!closed.ok) return err(closed.error);
+
+    return ok({
+      type: 'MARKET_CLOSED',
+      payload: { market: closed.value.market, purchases: closed.value.purchases },
+    });
+  }
+
+  /** A team buys one Market item. Spending goes through the ledger. */
+  purchaseMarketItem(input: {
+    readonly teamId: TeamId;
+    readonly item: string;
+  }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    if (!this.#teams.has(input.teamId)) {
+      return err(rejection('NOT_FOUND', 'Unknown team.', { teamId: input.teamId }));
+    }
+    if (!isMarketItem(input.item)) {
+      return err(rejection('NOT_FOUND', 'No such Market item.', { item: input.item }));
+    }
+
+    const bought = this.#shared.purchase({ teamId: input.teamId, item: input.item });
+    if (!bought.ok) return err(bought.error);
+
+    return ok({
+      type: 'MARKET_PURCHASE_RECORDED',
+      payload: {
+        // WHO bought, never WHAT, while shopping is hidden. §10 / spec §42. The
+        // item reaches the buyer in their own acknowledgement and everyone else
+        // at MARKET_CLOSED.
+        teamId: input.teamId,
+        teams: this.teams(),
+      },
+    });
+  }
+
+  /** Draw one Maco Mail card for a team. */
+  drawMacoMail(input: {
+    readonly teamId: TeamId;
+    readonly eligibleAnswererChallengeRemains?: boolean;
+    readonly futureMarketRemains?: boolean;
+  }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    if (!this.#teams.has(input.teamId)) {
+      return err(rejection('NOT_FOUND', 'Unknown team.', { teamId: input.teamId }));
+    }
+
+    if (!this.#shared.macoMail.built) {
+      const built = this.#shared.macoMail.build();
+      if (!built.ok) return err(built.error);
+    }
+
+    const context = this.#shared.macoContext({
+      teamIds: [...this.#teams.keys()].map((id) => asTeamId(id)),
+      ...(input.eligibleAnswererChallengeRemains === undefined
+        ? {}
+        : { eligibleAnswererChallengeRemains: input.eligibleAnswererChallengeRemains }),
+      ...(input.futureMarketRemains === undefined
+        ? {}
+        : { futureMarketRemains: input.futureMarketRemains }),
+    });
+
+    const drawn = this.#shared.macoMail.draw(input.teamId, context);
+    if (!drawn.ok) return err(drawn.error);
+
+    return ok({
+      type: 'MACO_MAIL_DRAWN',
+      payload: {
+        // A draw is revealed once it happens — it has already taken effect.
+        draw: drawn.value,
+        deck: this.#shared.macoMail.deckView(),
+        teams: this.teams(),
+      },
+    });
+  }
+
+  /** A team uses a held advantage. Stacking rules apply centrally. */
+  useAdvantage(input: {
+    readonly teamId: TeamId;
+    readonly advantageId: string;
+  }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const used = this.#shared.advantages.use(input);
+    if (!used.ok) return err(used.error);
+
+    // +15 Seconds and Extra Time act on the SERVER's timer, never on a client
+    // countdown. Phase 6 spec §27.
+    if (used.value.type === 'EXTRA_TIME') {
+      this.#timer.extend(PLUS_15_SECONDS_MS);
+    }
+
+    return ok({
+      type: 'ADVANTAGE_USED',
+      payload: {
+        advantage: used.value,
+        usage: this.#shared.advantages.usageFor(input.teamId),
+        timer: this.#timer.view(),
+      },
+    });
+  }
+
+  /** Host offers one of the four locked deal templates. D-009. */
+  offerHostDeal(input: {
+    readonly template: string;
+    readonly teamId: TeamId;
+    readonly opponentTeamId?: TeamId | null;
+  }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    if (!isHostDealTemplate(input.template)) {
+      return err(rejection('NOT_FOUND', 'No such Host Deal template.', { template: input.template }));
+    }
+
+    const offered = this.#shared.deals.offer({
+      template: input.template,
+      teamId: input.teamId,
+      opponentTeamId: input.opponentTeamId ?? null,
+      roundIndex: this.#roundIndex,
+      knownTeamIds: [...this.#teams.keys()].map((id) => asTeamId(id)),
+    });
+    if (!offered.ok) return err(offered.error);
+
+    return ok({ type: 'HOST_DEAL_OFFERED', payload: { deal: offered.value } });
+  }
+
+  /** The team accepts or declines. Every amount comes from the template. */
+  respondToHostDeal(input: {
+    readonly dealId: string;
+    readonly teamId: TeamId;
+    readonly choice: string;
+  }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    if (input.choice !== 'accept' && input.choice !== 'decline') {
+      return err(rejection('INVALID_REQUEST', 'A deal is accepted or declined.'));
+    }
+
+    const answered = this.#shared.deals.respond({
+      dealId: input.dealId,
+      teamId: input.teamId,
+      choice: input.choice,
+    });
+    if (!answered.ok) return err(answered.error);
+
+    return ok({
+      type: 'HOST_DEAL_RESOLVED',
+      payload: {
+        deal: answered.value.deal,
+        grantsMacoDraw: answered.value.grantsMacoDraw,
+        teams: this.teams(),
+      },
+    });
+  }
+
+  /** A team locks a wager, up to 50% of current BB. §17. */
+  proposeWager(input: {
+    readonly teamId: TeamId;
+    readonly amount: number;
+    readonly contextRef?: string | null;
+  }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    if (!this.#teams.has(input.teamId)) {
+      return err(rejection('NOT_FOUND', 'Unknown team.', { teamId: input.teamId }));
+    }
+
+    const locked = this.#shared.deals.proposeWager({
+      teamId: input.teamId,
+      amount: input.amount,
+      contextRef: input.contextRef ?? null,
+    });
+    if (!locked.ok) return err(locked.error);
+
+    return ok({ type: 'WAGER_LOCKED', payload: { wager: locked.value } });
+  }
+
+  /** Host resolves a locked wager. Exactly once. */
+  resolveWager(input: { readonly wagerId: string; readonly won: boolean }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const resolved = this.#shared.deals.resolveWager(input);
+    if (!resolved.ok) return err(resolved.error);
+
+    return ok({
+      type: 'WAGER_RESOLVED',
+      payload: { wager: resolved.value, teams: this.teams() },
+    });
+  }
+
+  // -------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------
 
@@ -1009,6 +1489,26 @@ export class GameEngine {
   get log(): EventLog {
     return this.#log;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Runtime validators.
+//
+// These narrow strings that arrived over a network. Types vanish at runtime and
+// intents come from phones, so a `challengeKind` field is a string until one of
+// these says otherwise — the same discipline room.ts applies to phase names.
+// ---------------------------------------------------------------------------
+
+function isCardChallengeKind(value: string): value is CardChallengeKind {
+  return (CARD_CHALLENGE_KINDS as readonly string[]).includes(value);
+}
+
+function isMarketItem(value: string): value is MarketItem {
+  return (MARKET_ITEMS as readonly string[]).includes(value);
+}
+
+function isHostDealTemplate(value: string): value is HostDealTemplate {
+  return (HOST_DEAL_TEMPLATES as readonly string[]).includes(value);
 }
 
 /** Mutable server-side challenge record. Never serialised directly. */

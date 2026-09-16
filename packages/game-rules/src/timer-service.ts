@@ -97,6 +97,30 @@ export class TimerService {
   }
 
   /**
+   * Add time to a running timer.
+   *
+   * Phase 6: the +15 Seconds advantage and the Market's Extra Time
+   * (GAME_RULES_LOCKED.md §8, §10). Phase 6 spec §27 — "Use the Phase 5
+   * authoritative timer service. Do not manipulate client countdowns
+   * independently." So the extension happens HERE, on the server's deadline,
+   * and reaches phones as an updated timer view like any other change.
+   *
+   * Extending an EXPIRED timer is refused: §8 says "activate before timer
+   * expires", and reviving a deadline clients have already been told about
+   * would be worse than useless. Returns the updated view, or null when there
+   * was nothing to extend.
+   */
+  extend(extraMs: number): TimerView | null {
+    const deadline = this.#deadline;
+    if (deadline === null) return null;
+    if (!Number.isFinite(extraMs) || extraMs <= 0) return null;
+    if (hasExpired(this.#clock, deadline)) return null;
+
+    this.#deadline = { ...deadline, durationMs: deadline.durationMs + extraMs };
+    return this.view();
+  }
+
+  /**
    * Freeze the timer.
    *
    * Idempotent, because the disconnect path may pause a game that is already

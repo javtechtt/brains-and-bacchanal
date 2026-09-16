@@ -495,6 +495,11 @@ namespace BrainsAndBacchanal
                 DrawPlayersPanel(snapshot, game);
                 GUILayout.Space(24);
                 DrawEnginePanel(snapshot, game);
+                GUILayout.Space(24);
+                // Phase 6 test instrument. Separate panel and separate file, so
+                // deleting it when Phase 8 builds the real presentation touches
+                // nothing else.
+                DrawSharedPanel(snapshot, game);
                 GUILayout.EndHorizontal();
             }
 

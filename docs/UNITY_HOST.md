@@ -107,6 +107,32 @@ here: game state changes far more often than the lobby roster (every BB award,
 every turn, every timer event), so an uncaptured read would hit the mismatch
 routinely rather than rarely.
 
+### The Phase 6 shared-systems test panel
+
+`HostSharedPanel.cs` is another separate partial class, for the same reason.
+Phase 6 spec §44 asks for "enough to test shared systems… functional, not
+polished", and explicitly **not** the final Market/Maco/Bacchanal presentation.
+
+It shows the card window and who has already played, the Clash (including Part
+Dat Fight, with the server's own explanation), the Market and every purchase with
+the actual price paid, the Maco Mail deck as counts, recent draws with their
+result, offered Host Deals, and locked wagers with WON/LOST buttons. It offers:
+deal hands, open/close a card window for a chosen challenge kind, open/close the
+Market, draw Maco Mail, offer any of the four locked deal templates, and resolve
+a wager.
+
+Its DTOs live in `Protocol/SharedMessages.cs`.
+
+**Two things it deliberately cannot show**, because the server does not send
+them: the Maco Mail deck **order**, and a Clash response **before the reveal**. A
+Host display is usually pointed at a TV the whole room can see, so "the Host may
+know it" is not the same as "it is safe to render".
+
+**`hands` is not a C# field.** The server sends it as an object keyed by teamId,
+and `JsonUtility` cannot deserialise a Dictionary — it would silently produce an
+empty one, which is exactly the quiet failure `HeadlessEngineCheck` exists to
+catch. The panel reads per-team state from the arrays it can deserialise instead.
+
 ### Not yet done
 
 - **The standalone `.exe` has not been driven through a full game by hand.** It

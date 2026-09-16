@@ -232,3 +232,55 @@ is deliberately not gated by a shared secret (see `docs/LOBBY.md`).
 
 Every entry it writes is stamped `dev_adjustment` in the ledger, so a test award
 can never be mistaken for earned BB when reading a game's history.
+
+## D-025 — Two Separate Bans Enforce "One Card Per Challenge"
+`GAME_RULES_LOCKED.md` §5 returns a losing card to its owner's hand **and** bars
+that team from playing again in the same challenge. Phase 6 stores those as two
+facts: a team-level `teamsWhoPlayed` set and a card-level
+`barredCardInstanceIds` set.
+
+Deriving either from the other gets Part Dat Fight wrong. There, every card
+returns to hand *and* every participating team is finished — so "does this team
+hold a playable card?" and "may this team play?" have different answers, and one
+set cannot express both.
+
+Phase 6 spec §8 asks for exactly this: "Represent this explicitly rather than
+inferring from card inventory."
+
+## D-026 — Market Affordability Is Checked Before the Ledger, Not By It
+BB floors at zero centrally (`BbLedger`), and a team must not buy what it cannot
+afford. **These are not the same rule.**
+
+Relying on the floor to deliver affordability would sell a 500 BB item to a team
+holding 300, leaving them at 0 — the deduction clamps, the purchase succeeds, and
+the team gets the item for 300. So `Market.purchase` compares the balance against
+the actual price (surcharge included) and refuses **before** touching the ledger.
+
+This is engineering, not a game rule; it is the correct reading of §10 plus §1.
+
+## D-027 — A Blocked Open Rule Is Not a Dud
+Maco Mail's dud (`GAME_RULES_LOCKED.md` §7) is a **locked outcome with
+consequences**: the draw is spent, no redraw, no refund.
+
+Partner, I Sorry with a payer under 500 BB is something else entirely — an
+**absence of a rule** (`OPEN_RULES.md` §12). Calling it a dud would quietly
+decide that open rule by giving it a locked consequence.
+
+So `MacoDrawResult` carries a distinct `blocked_open_rule` value. No BB moves on
+either side, the Host is told why, and the tests assert the block while asserting
+nothing about what should happen instead.
+
+When the owner resolves §12, this value's only use disappears.
+
+## D-028 — Advantage Expiry Is Decided by Source, Not by the Caller
+Market items "expire after the immediately following round" (§10). Maco Mail held
+advantages "stay out until used or game ends" (§7). Two locked rules, two
+lifetimes, one `HeldAdvantageView`.
+
+`Advantages.grant` therefore sets `expiresAfterRound` **from the source**, and
+ignores any value passed for a Maco Mail advantage. A caller passing the wrong
+thing cannot delete a Maco advantage early, and a Market item cannot be made
+immortal.
+
+Sharing one type is what lets "maximum one clue" (§10) be checked over a single
+list regardless of where each clue came from.

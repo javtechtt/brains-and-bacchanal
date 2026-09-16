@@ -32,6 +32,8 @@ Implementation references (generated during development, not rule sources):
 - `docs/PROTOCOL.md`
 - `docs/STATE_MACHINE.md`
 - `docs/LOBBY.md`
+- `docs/GAME_ENGINE.md`
+- `docs/SHARED_SYSTEMS.md`
 - `docs/NETWORK_BENCHMARK.md`
 - `docs/UNITY_HOST.md`
 
@@ -211,15 +213,16 @@ After each major task, report:
 
 ## Current Phase
 
-**Phases 1–5 are complete.**
+**Phases 1–6 are complete.**
 
 - Phase 1 — Project Foundation
 - Phase 2 — Protocol + Generic Game State
 - Phase 3 — Realtime Transport Comparison (closed: raw WebSockets, D-014)
 - Phase 4 — Rooms, Players, Teams & Reconnect (`docs/LOBBY.md`)
 - Phase 5 — Generic Authoritative Engine (`docs/GAME_ENGINE.md`)
+- Phase 6 — Shared Systems (`docs/SHARED_SYSTEMS.md`)
 
-Next is **Phase 6 — Shared Systems** from `docs/DEVELOPMENT_ROADMAP.md`.
+Next is **Phase 7 — Rounds** from `docs/DEVELOPMENT_ROADMAP.md`.
 **Do not begin it without the project owner asking.**
 
 Do not jump ahead to full gameplay.
@@ -232,14 +235,36 @@ Do not finalize any rule listed in `docs/OPEN_RULES.md`.
 
 The engine is generic on purpose. It does not define any challenge duration, does
 not give timer expiry a meaning (D-022: a timeout is **not** a wrong answer), does
-not constrain `challengeType`, and does not decide what a round contains. Phase 6
-and 7 supply those from locked rules — not from the engine's shape.
+not constrain `challengeType`, and does not decide what a round contains. Phase 7
+supplies those from locked rules — not from the engine's shape.
 
 The mid-game **Host disconnect** rule is still open: connection loss is recorded
 and play is left exactly as it was.
+
+### Phase 6 leaves these deliberately undecided
+
+The shared systems track ownership, legality, timing and consumption. They do
+**not** decide what any effect is worth — a round supplies the base reward and
+the shared system applies the allowed multiplier. No challenge duration is
+defined except the Clash's locked 3 seconds.
+
+The generic wager is a primitive with **no Family Feud board**, deliberately.
 
 ### Standing note on Maco! (OPEN_RULES.md §7)
 
 The owner's current instruction: **leave Maco! out for now; if it is never
 resolved, it does not go in the deck.** This is a decision to DEFER, not a rule.
 Do not implement Maco! eligibility, and do not quietly give it a legal challenge.
+
+**As built in Phase 6:** the card type exists and *is* dealt in starting hands
+(the spec forbade removing it), but it appears in no row of the eligibility
+table, so it can never legally be played. `CARDS_WITHOUT_LEGAL_CHALLENGE`
+derives to `['MACO']` rather than being written down — resolving §7 by adding it
+to the table empties that list automatically. A test asserts it stays unplayable.
+
+### Standing note on Partner, I Sorry (OPEN_RULES.md §12)
+
+Resolves normally when the payer holds **500 BB or more**. Below that the rule
+runs out, so the card is **blocked, not resolved** — `blocked_open_rule`, with no
+BB moved on either side (D-027). It is deliberately not treated as a dud, which
+is a locked outcome with consequences. Do not invent the under-500 behaviour.

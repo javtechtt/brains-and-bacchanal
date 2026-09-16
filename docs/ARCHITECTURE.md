@@ -109,6 +109,21 @@ scattered through round code. Timers are server-owned; a client may interpolate 
 countdown for display but never decides expiry. Turn ownership is assigned only
 by the server. See `docs/GAME_ENGINE.md`.
 
+Phase 6 extends it to the shared systems. Card eligibility, the Clash outcome,
+Market prices and affordability, deck draws, the RNG result, advantage stacking,
+the Host Deal limit and wager validity are **all** decided server-side. A team
+sends a card, a purchase, a deal answer or a stake; it never reports one.
+
+Two additions are worth naming:
+
+- **The acting team is resolved from the connection, never from the payload.** No
+  player handler reads a client-supplied `teamId`.
+- **No Host Deal amount exists on the wire.** `GAME_RULES_LOCKED.md` §9 requires
+  deal mathematics to come from predefined templates, so the intent carries a
+  template name and the server supplies every number.
+
+See `docs/SHARED_SYSTEMS.md`.
+
 ## 5. Event Log
 
 Accepted state changes should record:
@@ -170,7 +185,9 @@ Production room socket: `/room/ws`. Benchmark: `/benchmark/ws`.
 **CURRENT REALITY: rooms AND active games live in memory only. Restarting the
 game server destroys every active room — codes, players, teams and reconnect
 credentials — and since Phase 5, every active game as well: BB balances, the
-ledger, the challenge, the timer and the pause state.**
+ledger, the challenge, the timer and the pause state. Phase 6 adds card hands,
+Market purchases, held advantages, the Maco Mail deck and every wager to that
+list.**
 
 There is no durable store yet. `RoomStore`
 (`packages/game-rules/src/room-store.ts`) is the seam where one goes.

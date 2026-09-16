@@ -18,9 +18,15 @@
  * ledger, generic challenges, turn ownership, timers, Host rulings and the
  * split Host/player game snapshots.
  *
- * Round-specific intents and events — cards, Clash, Market, Maco Mail, wagers,
- * the buzzer — still belong to the phases that implement those behaviours, and
- * several depend on rules open in docs/OPEN_RULES.md.
+ * Phase 6 adds the SHARED SYSTEMS every round draws on: Bacchanal cards and the
+ * Clash (cards.ts), the Market and held advantages (market.ts), Maco Mail
+ * (maco-mail.ts), Host Deals and the generic wager (deals.ts), and the intents,
+ * events and secrecy-aware views that tie them together (shared-systems.ts).
+ *
+ * Still NOT here: any round. No question allocation, no Family Feud board, no
+ * buzzer, no Sudden Death. Several of those depend on rules open in
+ * docs/OPEN_RULES.md — including Maco!'s challenge compatibility (§7), which is
+ * why cards.ts models the card but never gives it a legal challenge.
  */
 
 export * from './version.js';
@@ -32,6 +38,11 @@ export * from './models.js';
 export * from './room.js';
 export * from './room-code.js';
 export * from './game.js';
+export * from './cards.js';
+export * from './market.js';
+export * from './maco-mail.js';
+export * from './deals.js';
+export * from './shared-systems.js';
 export * from './snapshot.js';
 export * from './transport.js';
 export * from './benchmark.js';

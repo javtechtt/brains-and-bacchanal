@@ -113,22 +113,31 @@ Not included, deliberately: durable storage (in memory only — a server restart
 now destroys balances and the ledger as well as the room), any round, and any
 rule for a mid-game Host disconnect. Nothing in `OPEN_RULES.md` was resolved.
 
-## Phase 6 — Shared Systems ◀ NEXT
+## Phase 6 — Shared Systems ✅ COMPLETE
 
-Build:
-- Bacchanal Cards,
-- eligibility,
-- Clash,
-- Part Dat Fight,
-- Market,
-- Maco Mail,
-- advantages,
-- Host Deals,
-- Family Feud wager primitive.
+Built:
+- Bacchanal Cards: ownership, the locked starting deal, lifecycle,
+- the approved eligibility table, configuration-driven,
+- the Bacchanal Clash with its locked 3-second hidden window,
+- Part Dat Fight, all five locked cases,
+- the Market: locked prices, hidden shopping, reveal, expiry, surcharges,
+- Maco Mail: the 20-card deck, draw without replacement, the dud rule,
+- held advantages and one centralised retry/multiplier/stacking budget,
+- Host Deals from the four locked templates, one per round,
+- the generic wager primitive (not connected to any board),
+- secrecy-aware Host and player views, and reconnect for all of it.
 
-Do not finalize open Maco / Family Feud card interactions until answered.
+All implemented. See `docs/SHARED_SYSTEMS.md`.
 
-## Phase 7 — Rounds
+Not included, deliberately: durable storage (still in memory only), any round,
+and any rule for a mid-game Host disconnect.
+
+**Nothing in `OPEN_RULES.md` was resolved.** Three entries visibly shaped the
+result: Maco! exists and is dealt but has no legal challenge (§7); Steups is a
+generic effect with no Family Feud board behaviour (§8); Partner, I Sorry
+resolves at ≥500 BB and is blocked below it (§12).
+
+## Phase 7 — Rounds ◀ NEXT
 
 ### Round 1
 Wait for final question allocation before hard-coding sequence.

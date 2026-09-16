@@ -3,6 +3,7 @@
 import { DEFAULT_TEAM_LABELS, type PlayerGameSnapshot } from '@bb/protocol';
 import { useEffect, useState } from 'react';
 import type { ConnectionStatus } from './client';
+import { PlayerSharedSystems } from './PlayerSharedSystems';
 import * as ui from './ui';
 
 /**
@@ -22,9 +23,18 @@ import * as ui from './ui';
 export function PlayerGame({
   snapshot,
   status,
+  submit,
 }: {
   snapshot: PlayerGameSnapshot;
   status: ConnectionStatus;
+  /**
+   * Send an intent on this player's behalf. Phase 6.
+   *
+   * A team decides its own card, purchase, deal answer and wager; the server
+   * decides whether any of that is legal. This only carries the request and
+   * reports what came back.
+   */
+  submit?: (type: string, payload?: unknown) => Promise<{ ok: boolean; message?: string }>;
 }) {
   const me = snapshot.players.find((p) => p.playerId === snapshot.you);
   const teamId = snapshot.yourTeamId;
@@ -133,6 +143,13 @@ export function PlayerGame({
             {status === 'connected' ? 'Connected' : 'Reconnecting…'}
           </span>
         </div>
+
+        {/* PHASE 6 TEST UI. Rendered only when the player's team actually has
+            shared-system state — before HOST_DEAL_BACCHANAL_CARDS there is
+            nothing to show, and an empty panel would just be noise. */}
+        {snapshot.shared !== null && submit !== undefined && (
+          <PlayerSharedSystems shared={snapshot.shared} paused={paused} submit={submit} />
+        )}
       </div>
     </main>
   );

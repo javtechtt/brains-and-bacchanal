@@ -14,6 +14,7 @@ import {
   rejection,
   ROOM_EVENTS,
   ROOM_INTENTS,
+  SHARED_INTENTS,
   teamsForMode,
   toPublicPlayer,
   type EventEnvelope,
@@ -305,6 +306,10 @@ export class Room {
         isHost: true,
         ledger: this.#game.ledgerEntries,
         devToolsEnabled: this.#game.devTools,
+        // Phase 6. Built by the shared systems rather than assembled here, so
+        // the secrecy boundary lives in one place (shared-systems.ts) and a new
+        // field cannot be added to a snapshot without passing through it.
+        shared: this.#game.started ? this.#game.shared.hostView() : null,
       };
       return hostSnapshot;
     }
@@ -323,6 +328,14 @@ export class Room {
       yourTeamId: teamId,
       youAreActive: role.kind === 'player' && this.#game.isActivePlayer(playerId),
       yourTurn: this.#isYourTurn(playerId, teamId),
+      // Phase 6. Scoped to the caller's OWN team — a player with no team gets
+      // null rather than a view of someone else's, and an unidentified
+      // connection lands here too (teamId is null), so the narrow path is also
+      // the default.
+      shared:
+        this.#game.started && teamId !== null
+          ? this.#game.shared.playerView(teamId, this.#game.paused)
+          : null,
     };
     return playerSnapshot;
   }
@@ -436,9 +449,23 @@ export class Room {
    * reach clients. Reports at most once per timer — see TimerService.
    */
   #pollTimer(): EventEnvelope[] {
+    const events: EventEnvelope[] = [];
+
     const expiry = this.#game.pollTimerExpiry();
-    if (expiry === null) return [];
-    return [this.#log.append(expiry.type, { kind: 'server' }, expiry.payload)];
+    if (expiry !== null) {
+      events.push(this.#log.append(expiry.type, { kind: 'server' }, expiry.payload));
+    }
+
+    // Phase 6: the Clash's 3-second window is observed the same way, and for
+    // the same reason — @bb/game-rules schedules nothing. A window that closes
+    // with nobody acting is the normal case, since every phone is silent while
+    // teams decide whether to counter.
+    const clash = this.#game.pollClashResolution();
+    if (clash !== null) {
+      events.push(this.#log.append(clash.type, { kind: 'server' }, clash.payload));
+    }
+
+    return events;
   }
 
   /**
@@ -506,6 +533,41 @@ export class Room {
         return this.#resumeGame(connectionId, intent);
       case GAME_INTENTS.DEV_ADJUST_BB:
         return this.#devAdjustBb(connectionId, intent);
+
+      // --- Phase 6: shared systems -------------------------------------------
+      // Host-gated: dealing, windows, the Market's opening and closing, draws,
+      // deals and wager resolution.
+      case SHARED_INTENTS.HOST_DEAL_BACCHANAL_CARDS:
+        return this.#engineAction(connectionId, intent, () => this.#game.dealBacchanalCards());
+      case SHARED_INTENTS.HOST_OPEN_CARD_WINDOW:
+        return this.#openCardWindow(connectionId, intent);
+      case SHARED_INTENTS.HOST_CLOSE_CARD_WINDOW:
+        return this.#engineAction(connectionId, intent, () => this.#game.closeCardWindow());
+      case SHARED_INTENTS.HOST_OPEN_MARKET:
+        return this.#openMarket(connectionId, intent);
+      case SHARED_INTENTS.HOST_CLOSE_MARKET:
+        return this.#engineAction(connectionId, intent, () => this.#game.closeMarket());
+      case SHARED_INTENTS.HOST_DRAW_MACO_MAIL:
+        return this.#drawMacoMail(connectionId, intent);
+      case SHARED_INTENTS.HOST_OFFER_DEAL:
+        return this.#offerHostDeal(connectionId, intent);
+      case SHARED_INTENTS.HOST_RESOLVE_WAGER:
+        return this.#resolveWager(connectionId, intent);
+
+      // Player-gated: a TEAM decides its own card, counter, purchase, deal
+      // answer and stake. The server still validates every one of them.
+      case SHARED_INTENTS.PLAY_BACCHANAL_CARD:
+        return this.#playBacchanalCard(connectionId, intent);
+      case SHARED_INTENTS.RESPOND_TO_CLASH:
+        return this.#respondToClash(connectionId, intent);
+      case SHARED_INTENTS.PURCHASE_MARKET_ITEM:
+        return this.#purchaseMarketItem(connectionId, intent);
+      case SHARED_INTENTS.USE_ADVANTAGE:
+        return this.#useAdvantage(connectionId, intent);
+      case SHARED_INTENTS.RESPOND_TO_HOST_DEAL:
+        return this.#respondToHostDeal(connectionId, intent);
+      case SHARED_INTENTS.PROPOSE_WAGER:
+        return this.#proposeWager(connectionId, intent);
 
       default:
         return this.#reject(rejection('INVALID_REQUEST', 'Unknown intent type.', { type: intent.type }));
@@ -1394,6 +1456,273 @@ export class Room {
     this.#game.attachLedgerSeq(outcome.value.entry.entryId, event.seq);
 
     return { ack: ok({ seq: event.seq }), broadcast: [event], direct: [], closeConnections: [] };
+  }
+
+  // -------------------------------------------------------------------------
+  // Phase 6 — shared systems
+  //
+  // Two authority models here, and the difference is deliberate. Host intents
+  // use the same #requireHost gate as everything in Phase 5. PLAYER intents use
+  // #requireTeam, which resolves the acting team FROM THE CONNECTION rather
+  // than from the payload — so a phone cannot spend another team's BB or play
+  // another team's card by naming them, because no handler reads a teamId a
+  // client supplied.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Resolve the team a player connection acts for.
+   *
+   * THE TEAM IS NEVER TAKEN FROM THE PAYLOAD. That is the whole protection:
+   * authority comes from the verified identity on the socket, exactly as
+   * #requireHost takes nothing from the intent either.
+   */
+  #requireTeam(connectionId: string): Result<TeamId> {
+    const role = this.roleOf(connectionId);
+    if (role.kind !== 'player') {
+      return err(rejection('UNAUTHORIZED_ACTOR', 'Only a joined player can do that.'));
+    }
+    const player = this.#players.get(role.playerId);
+    if (player === undefined) {
+      return err(rejection('NOT_FOUND', 'Player not found.'));
+    }
+    if (player.teamId === null) {
+      return err(rejection('ILLEGAL_ACTION', 'You are not on a team.'));
+    }
+    return ok(player.teamId);
+  }
+
+  #openCardWindow(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const challengeKind = readString(intent.payload, 'challengeKind');
+    if (challengeKind === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing challengeKind.'));
+    }
+
+    const outcome = this.#game.openCardWindow(challengeKind);
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  #openMarket(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const round = readField(intent.payload, 'round');
+    if (typeof round !== 'number') {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing round.'));
+    }
+
+    const outcome = this.#game.openMarket(round);
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  #drawMacoMail(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const teamId = readString(intent.payload, 'teamId');
+    if (teamId === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing teamId.'));
+    }
+
+    // Whether a future challenge or Market remains is the CALLER's to state —
+    // Phase 6 spec §34 forbids the engine deciding which challenges count.
+    const answerer = readField(intent.payload, 'eligibleAnswererChallengeRemains');
+    const market = readField(intent.payload, 'futureMarketRemains');
+
+    const outcome = this.#game.drawMacoMail({
+      teamId: asTeamId(teamId),
+      ...(typeof answerer === 'boolean' ? { eligibleAnswererChallengeRemains: answerer } : {}),
+      ...(typeof market === 'boolean' ? { futureMarketRemains: market } : {}),
+    });
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    return this.#publishWithLedger(outcome.value, intent);
+  }
+
+  #offerHostDeal(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const template = readString(intent.payload, 'template');
+    const teamId = readString(intent.payload, 'teamId');
+    if (template === null || teamId === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing template or teamId.'));
+    }
+    const opponent = readString(intent.payload, 'opponentTeamId');
+
+    // NO AMOUNT IS READ. GAME_RULES_LOCKED.md §9 — deal mathematics come from
+    // server-side templates, never from the Host client.
+    const outcome = this.#game.offerHostDeal({
+      template,
+      teamId: asTeamId(teamId),
+      opponentTeamId: opponent === null ? null : asTeamId(opponent),
+    });
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  #resolveWager(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const wagerId = readString(intent.payload, 'wagerId');
+    const won = readField(intent.payload, 'won');
+    if (wagerId === null || typeof won !== 'boolean') {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing wagerId or won.'));
+    }
+
+    const outcome = this.#game.resolveWager({ wagerId, won });
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publishWithLedger(outcome.value, intent);
+  }
+
+  #playBacchanalCard(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const team = this.#requireTeam(connectionId);
+    if (!team.ok) return this.#reject(team.error);
+
+    const cardInstanceId = readString(intent.payload, 'cardInstanceId');
+    if (cardInstanceId === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing cardInstanceId.'));
+    }
+    const target = readString(intent.payload, 'targetTeamId');
+
+    const outcome = this.#game.playBacchanalCard({
+      teamId: team.value,
+      cardInstanceId,
+      targetTeamId: target === null ? null : asTeamId(target),
+    });
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * A team's secret Clash counter.
+   *
+   * The acknowledgement carries the team's own view back so the phone can show
+   * its locked choice; the BROADCAST carries only that a response arrived.
+   * Phase 6 spec §42.
+   */
+  #respondToClash(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const team = this.#requireTeam(connectionId);
+    if (!team.ok) return this.#reject(team.error);
+
+    const cardInstanceId = readString(intent.payload, 'cardInstanceId');
+    if (cardInstanceId === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing cardInstanceId.'));
+    }
+    const target = readString(intent.payload, 'targetTeamId');
+
+    const outcome = this.#game.respondToClash({
+      teamId: team.value,
+      cardInstanceId,
+      targetTeamId: target === null ? null : asTeamId(target),
+    });
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * A Market purchase.
+   *
+   * The item reaches the BUYER in the acknowledgement and everyone else only at
+   * MARKET_CLOSED — §10's hidden shopping, enforced by what each channel
+   * carries rather than by a client choosing not to look.
+   */
+  #purchaseMarketItem(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const team = this.#requireTeam(connectionId);
+    if (!team.ok) return this.#reject(team.error);
+
+    const item = readString(intent.payload, 'item');
+    if (item === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing item.'));
+    }
+
+    const outcome = this.#game.purchaseMarketItem({ teamId: team.value, item });
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    this.#touch();
+    const event = this.#log.append(
+      outcome.value.type,
+      { kind: 'player', sessionId: '' as never, playerId: '' as never },
+      outcome.value.payload,
+      intent.intentId,
+    );
+
+    return {
+      // Only the buyer learns what was bought, and only in their own reply.
+      ack: ok({ seq: event.seq, payload: this.#game.shared.market.teamView(team.value) }),
+      broadcast: [event],
+      direct: [],
+      closeConnections: [],
+    };
+  }
+
+  #useAdvantage(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const team = this.#requireTeam(connectionId);
+    if (!team.ok) return this.#reject(team.error);
+
+    const advantageId = readString(intent.payload, 'advantageId');
+    if (advantageId === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing advantageId.'));
+    }
+
+    const outcome = this.#game.useAdvantage({ teamId: team.value, advantageId });
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  #respondToHostDeal(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const team = this.#requireTeam(connectionId);
+    if (!team.ok) return this.#reject(team.error);
+
+    const dealId = readString(intent.payload, 'dealId');
+    const choice = readString(intent.payload, 'choice');
+    if (dealId === null || choice === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing dealId or choice.'));
+    }
+
+    const outcome = this.#game.respondToHostDeal({ dealId, teamId: team.value, choice });
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publishWithLedger(outcome.value, intent);
+  }
+
+  #proposeWager(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const team = this.#requireTeam(connectionId);
+    if (!team.ok) return this.#reject(team.error);
+
+    const amount = readField(intent.payload, 'amount');
+    if (typeof amount !== 'number') {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing amount.'));
+    }
+
+    const outcome = this.#game.proposeWager({
+      teamId: team.value,
+      amount,
+      contextRef: readString(intent.payload, 'contextRef'),
+    });
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * Publish an engine change and link any ledger entries it produced.
+   *
+   * Used by the paths that move BB — Maco Mail, Host Deals, wagers — so every
+   * entry can be traced to the event clients saw, exactly as Phase 5 does for a
+   * challenge result.
+   */
+  #publishWithLedger(change: EngineChange, intent: IntentEnvelope): RoomOutcome {
+    const outcome = this.#publish(change, intent);
+    if (outcome.ack.ok) {
+      for (const entry of this.#game.ledgerEntries) {
+        if (entry.seq === null) this.#game.attachLedgerSeq(entry.entryId, outcome.ack.value.seq);
+      }
+    }
+    return outcome;
   }
 
   // -------------------------------------------------------------------------

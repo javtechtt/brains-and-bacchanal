@@ -154,6 +154,51 @@ async def case_d_intentional_leave():
     await host.close()
 
 
+async def case_room_close():
+    """
+    Closing is terminal: the Host is told, and the room refuses everything
+    afterward. This is the server-side contract HostLobby.cs relies on when it
+    resets to the create-room screen on ROOM_CLOSED rather than merely
+    reflecting a "status: CLOSED" snapshot forever.
+    """
+    host, room = await new_room()
+    player, info = await join(room, "Javal")
+
+    ack = await host.submit("HOST_CLOSE_ROOM")
+    check("close accepted", ack.get("ok") is True, str(ack)[:200])
+
+    await host.drain(0.5)
+    check("host receives ROOM_CLOSED",
+          host.saw("ROOM_CLOSED"), str([e.get("type") for e in host.events]))
+
+    # A snapshot request must still be answerable (it is read-only), but must
+    # report the closed status rather than silently pretending the room is
+    # still open.
+    snap = await host.submit("REQUEST_LOBBY_SNAPSHOT")
+    check("snapshot reports CLOSED status",
+          snap["snapshot"]["room"]["status"] == "CLOSED", str(snap["snapshot"]["room"]))
+
+    # Nothing further should be possible: no new joins, no reconnects, no
+    # further Host actions.
+    late = await Client().connect()
+    late.room_id = room["roomId"]
+    ack = await late.submit("JOIN_ROOM",
+                            {"roomCode": room["roomCode"], "displayName": "TooLate"})
+    check("join refused after close", ack.get("ok") is False, str(ack)[:200])
+
+    ack = await host.submit("HOST_LOCK_TEAMS")
+    check("host actions refused after close", ack.get("ok") is False, str(ack)[:200])
+
+    returning = await Client().connect()
+    returning.room_id = room["roomId"]
+    ack = await returning.submit("RECONNECT_PLAYER", {
+        "playerId": info["playerId"], "reconnectToken": info["reconnectToken"]})
+    check("player reconnect refused after close", ack.get("ok") is False, str(ack)[:200])
+
+    for client in (late, returning, player, host):
+        await client.close()
+
+
 async def case_e_stale_connection():
     """E: a second connection takes over while the first is still open."""
     host, room = await new_room()
@@ -302,8 +347,8 @@ async def case_capacity_and_lock():
 
 async def main():
     for case in (case_a_network_interruption, case_d_intentional_leave,
-                 case_e_stale_connection, case_late_close, case_host_removal,
-                 case_three_team_guard, case_capacity_and_lock):
+                 case_room_close, case_e_stale_connection, case_late_close,
+                 case_host_removal, case_three_team_guard, case_capacity_and_lock):
         print(f"\n--- {case.__name__} ---")
         await case()
 

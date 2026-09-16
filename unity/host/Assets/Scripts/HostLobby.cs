@@ -91,9 +91,18 @@ namespace BrainsAndBacchanal
                 case RoomEvents.TeamAssignmentChanged:
                 case RoomEvents.TeamsLocked:
                 case RoomEvents.TeamsUnlocked:
-                case RoomEvents.RoomClosed:
                 case RoomEvents.HostConnectionChanged:
                     _ = RefreshSnapshotAsync();
+                    break;
+
+                // A closed room is terminal — no reconnects, no reopening. A
+                // refreshed snapshot would come back with status "CLOSED" and
+                // leave the panel showing a dead room forever, since nothing
+                // else in this class transitions away from it. Reset to the
+                // create-room screen instead of merely reflecting the closed
+                // state.
+                case RoomEvents.RoomClosed:
+                    ResetToSetupScreen("This room was closed.");
                     break;
 
                 case RoomEvents.ConnectionSuperseded:
@@ -199,6 +208,35 @@ namespace BrainsAndBacchanal
             }
         }
 
+        /// <summary>
+        /// Drop all state for the room that just closed and return to the
+        /// create-room screen.
+        ///
+        /// Closing is terminal (docs/LOBBY.md — CLOSED accepts no joins and no
+        /// reconnects), so there is nothing left to reflect about this room.
+        /// `_client.RoomId` is left as-is deliberately: CreateRoomAsync always
+        /// overwrites it with the NO_ROOM_ID placeholder before the next
+        /// CREATE_ROOM, and the socket itself stays open and reusable — a
+        /// closed room does not mean a closed connection.
+        /// </summary>
+        private void ResetToSetupScreen(string statusMessage)
+        {
+            _snapshot = null;
+            _roomCode = "";
+            _hostToken = "";
+            _joinUrl = "";
+            _selectedPlayerId = "";
+            _lastError = "";
+            _status = statusMessage;
+
+            if (_qrTexture != null)
+            {
+                Destroy(_qrTexture);
+                _qrTexture = null;
+            }
+            _qrEncodedUrl = "";
+        }
+
         private async Task RefreshSnapshotAsync()
         {
             var ack = await _client.SubmitAsync(RoomIntents.RequestLobbySnapshot, "{}")
@@ -216,6 +254,15 @@ namespace BrainsAndBacchanal
             {
                 var ack = await _client.SubmitAsync(type, payloadJson).ConfigureAwait(false);
                 _lastError = ack != null && !ack.ok ? ack.error?.message ?? "Rejected." : "";
+
+                if (ack != null && ack.ok && type == RoomIntents.CloseRoom)
+                {
+                    // No point re-reading a snapshot of a room that no longer
+                    // accepts anything: HandleMessage's ROOM_CLOSED case already
+                    // resets to the create-room screen once the server's own
+                    // broadcast confirms the close.
+                    return;
+                }
 
                 // Re-read rather than assume: the server may have rejected this,
                 // and the snapshot is the only thing that knows.
@@ -288,6 +335,27 @@ namespace BrainsAndBacchanal
 
         private void OnGUI()
         {
+            // Unity calls OnGUI at least twice per displayed frame — a Layout
+            // pass, then a Repaint pass — and an IMGUI group like
+            // BeginHorizontal/EndHorizontal remembers how many controls it saw
+            // during Layout so it can reuse that geometry during Repaint. If the
+            // number of controls differs between the two passes, Unity throws
+            // exactly the "position in a group with only N controls" exception
+            // seen here.
+            //
+            // _snapshot is reassigned from network callbacks running through
+            // Update(), NOT from inside OnGUI. Reading the mutable field
+            // separately in each draw method (once for "is there a snapshot at
+            // all", again for "how many teams are there") meant a snapshot
+            // arriving BETWEEN the Layout and Repaint passes of one OnGUI call
+            // could change which branch ran, or how many buttons a loop drew,
+            // between those two passes of the very group that just threw.
+            //
+            // The fix: capture ONE reference at the top of OnGUI and pass it
+            // through explicitly, so every draw call in this pass — Layout and
+            // Repaint alike — sees the identical value.
+            var snapshot = _snapshot;
+
             GUILayout.BeginArea(new Rect(16, 16, Screen.width - 32, Screen.height - 32));
 
             GUILayout.Label("BRAINS & BACCHANAL — HOST", HeaderStyle);
@@ -302,16 +370,16 @@ namespace BrainsAndBacchanal
 
             GUILayout.Space(8);
 
-            if (_snapshot == null)
+            if (snapshot == null)
             {
                 DrawSetup();
             }
             else
             {
                 GUILayout.BeginHorizontal();
-                DrawRoomPanel();
+                DrawRoomPanel(snapshot);
                 GUILayout.Space(24);
-                DrawPlayersPanel();
+                DrawPlayersPanel(snapshot);
                 GUILayout.EndHorizontal();
             }
 
@@ -343,7 +411,7 @@ namespace BrainsAndBacchanal
             GUI.enabled = true;
         }
 
-        private void DrawRoomPanel()
+        private void DrawRoomPanel(LobbySnapshot snapshot)
         {
             GUILayout.BeginVertical(GUILayout.Width(330));
 
@@ -361,7 +429,7 @@ namespace BrainsAndBacchanal
 
             GUILayout.Space(8);
 
-            var room = _snapshot.room;
+            var room = snapshot.room;
             GUILayout.Label($"Status: {room.status}");
             GUILayout.Label($"Teams: {(room.teamsLocked ? "LOCKED" : "unlocked")}");
 
@@ -405,11 +473,11 @@ namespace BrainsAndBacchanal
             GUILayout.EndVertical();
         }
 
-        private void DrawPlayersPanel()
+        private void DrawPlayersPanel(LobbySnapshot snapshot)
         {
             GUILayout.BeginVertical();
 
-            var players = _snapshot.players ?? Array.Empty<LobbyPlayer>();
+            var players = snapshot.players ?? Array.Empty<LobbyPlayer>();
             GUILayout.Label($"PLAYERS ({players.Length})", HeaderStyle);
 
             if (players.Length == 0)
@@ -444,22 +512,30 @@ namespace BrainsAndBacchanal
             GUILayout.EndScrollView();
 
             GUILayout.Space(8);
-            DrawTeamControls();
+            DrawTeamControls(snapshot);
 
             GUILayout.EndVertical();
         }
 
-        private void DrawTeamControls()
+        private void DrawTeamControls(LobbySnapshot snapshot)
         {
             var hasSelection = !string.IsNullOrEmpty(_selectedPlayerId);
-            var locked = _snapshot.room.teamsLocked;
+            var locked = snapshot.room.teamsLocked;
 
             GUILayout.Label(hasSelection ? "Assign selected player to:" : "Select a player above.");
 
             GUILayout.BeginHorizontal();
             GUI.enabled = !_busy && hasSelection && !locked;
 
-            foreach (var teamId in TeamsInPlay())
+            // Materialised once, into a fixed list, rather than iterated
+            // straight off TeamsInPlay(snapshot). This same `teams` value is
+            // used below to size GUI.enabled state consistently, but the real
+            // point is that both the Layout and Repaint pass of THIS OnGUI call
+            // now iterate one list built from the one captured `snapshot` — not
+            // two separate live reads of a field that Update() can change
+            // between those passes.
+            var teams = TeamsInPlay(snapshot);
+            foreach (var teamId in teams)
             {
                 if (GUILayout.Button(TeamIds.Label(teamId), GUILayout.Width(90), GUILayout.Height(30)))
                 {
@@ -487,11 +563,23 @@ namespace BrainsAndBacchanal
             GUILayout.EndHorizontal();
         }
 
-        private IEnumerable<string> TeamsInPlay()
+        /// <summary>
+        /// Team ids currently in play.
+        ///
+        /// Takes the snapshot as a parameter and returns a materialised list
+        /// rather than reading the mutable `_snapshot` field or yielding
+        /// lazily. A caller must get the SAME list back if called twice within
+        /// one OnGUI invocation (Layout pass, then Repaint pass) — see the
+        /// comment in OnGUI. A lazy `yield return` sequence re-evaluates
+        /// `_snapshot.room.teamMode` at enumeration time, which is exactly what
+        /// let Update() swap in a room with a different team mode between the
+        /// two passes of the same GUILayout.BeginHorizontal group.
+        /// </summary>
+        private static List<string> TeamsInPlay(LobbySnapshot snapshot)
         {
-            yield return TeamIds.A;
-            yield return TeamIds.B;
-            if (_snapshot.room.teamMode == 3) yield return TeamIds.C;
+            var teams = new List<string> { TeamIds.A, TeamIds.B };
+            if (snapshot.room.teamMode == 3) teams.Add(TeamIds.C);
+            return teams;
         }
 
         // -------------------------------------------------------------------

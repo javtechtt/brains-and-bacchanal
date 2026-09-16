@@ -392,6 +392,12 @@ describe('auto-pause over a real socket', () => {
       expect(afterReconnect.you).toBe(party.p1.playerId);
       expect(afterReconnect.yourTeamId).toBe('TEAM_A');
 
+      // The returning phone must be told the timer is FROZEN, not merely how
+      // much is left. A client that knows only `remainingMs` will happily count
+      // it down locally — which is exactly what happened in the Phase 5
+      // physical test, on that one screen, while everyone else saw it stopped.
+      expect(afterReconnect.game?.challenge?.timer?.paused).toBe(true);
+
       // A phone cannot resume.
       const byPhone = await returning.submit(GAME_INTENTS.HOST_RESUME_GAME, {});
       expect(byPhone.ok).toBe(false);

@@ -167,9 +167,10 @@ function PlayStatus({ snapshot }: { snapshot: PlayerGameSnapshot }) {
         <p style={{ ...ui.muted, margin: 0 }}>Waiting for the Host…</p>
       )}
 
-      {game.challenge?.timer !== undefined && game.challenge?.timer !== null && !game.challenge.timer.paused && (
+      {game.challenge?.timer !== undefined && game.challenge?.timer !== null && (
         <TimerDisplay
           remainingMs={game.challenge.timer.remainingMs}
+          paused={game.challenge.timer.paused}
           key={game.challenge.timer.timerId}
         />
       )}
@@ -188,17 +189,24 @@ function PlayStatus({ snapshot }: { snapshot: PlayerGameSnapshot }) {
  * number moves smoothly; it NEVER decides that time ran out. Expiry is the
  * server's, announced as an event. The display floors at zero and waits.
  */
-function TimerDisplay({ remainingMs }: { remainingMs: number }) {
+function TimerDisplay({ remainingMs, paused }: { remainingMs: number; paused: boolean }) {
   const [displayMs, setDisplayMs] = useState(remainingMs);
 
   useEffect(() => {
     setDisplayMs(remainingMs);
+
+    // A paused timer holds still. The server banks the remaining time and
+    // excludes the pause from elapsed time, so counting down here would
+    // contradict it — and would show a player's clock draining while the game
+    // is stopped waiting for them.
+    if (paused) return undefined;
+
     const startedAt = Date.now();
     const id = setInterval(() => {
       setDisplayMs(Math.max(0, remainingMs - (Date.now() - startedAt)));
     }, 100);
     return () => clearInterval(id);
-  }, [remainingMs]);
+  }, [remainingMs, paused]);
 
   return (
     <p

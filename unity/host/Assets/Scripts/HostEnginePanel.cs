@@ -1,6 +1,9 @@
 using System;
 using UnityEngine;
 using BrainsAndBacchanal.Protocol;
+// Aliased, not imported wholesale: System.Diagnostics.Debug would collide with
+// UnityEngine.Debug the moment anything in this file logs.
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace BrainsAndBacchanal
 {
@@ -166,9 +169,7 @@ namespace BrainsAndBacchanal
             var timer = challenge.timer;
             if (timer != null && !string.IsNullOrEmpty(timer.timerId))
             {
-                // The server's number, shown as it was sent. Unity does not run
-                // the clock and never decides that time ran out.
-                var seconds = Mathf.CeilToInt(timer.remainingMs / 1000f);
+                var seconds = Mathf.CeilToInt(DisplayRemainingMs(timer) / 1000f);
                 GUILayout.Label($"Timer: {seconds}s{(timer.paused ? "  (frozen)" : "")}");
             }
             else
@@ -423,6 +424,40 @@ namespace BrainsAndBacchanal
             var names = new string[playerIds.Length];
             for (var i = 0; i < playerIds.Length; i++) names[i] = NameOf(playerIds[i]);
             return names;
+        }
+
+        /// <summary>
+        /// What the timer should READ right now, interpolated since the last
+        /// snapshot.
+        ///
+        /// WHY THIS IS NEEDED: a running timer emits no events. The engine
+        /// announces TIMER_STARTED and then says nothing until it expires or
+        /// something else happens, because a per-second tick would be pure
+        /// network noise and would inflate nothing useful.
+        ///
+        /// So a display that only refreshed on events showed the value from
+        /// TIMER_STARTED — a frozen "30" — until the next event arrived. When
+        /// that event was GAME_PAUSED, the number finally jumped to its true
+        /// value, which looks exactly like "the timer kept running through the
+        /// disconnect". It had not: the server had frozen it correctly, and the
+        /// display was simply stale. Found during the Phase 5 physical test.
+        ///
+        /// AUTHORITY IS UNCHANGED. This moves a number on a screen between
+        /// server updates. It never decides expiry — that is the server's, and
+        /// arrives as TIMER_EXPIRED (D-022). Floored at zero so a slow snapshot
+        /// cannot show a negative countdown.
+        /// </summary>
+        private float DisplayRemainingMs(TimerView timer)
+        {
+            // A paused timer holds still. The server has banked the remaining
+            // time and excludes the pause from elapsed time, so counting down
+            // here would contradict it — and would recreate the very bug this
+            // method exists to fix.
+            if (timer.paused) return timer.remainingMs;
+
+            var elapsedMs =
+                (Stopwatch.GetTimestamp() - _gameSnapshotAtTicks) * 1000.0 / Stopwatch.Frequency;
+            return Mathf.Max(0f, timer.remainingMs - (float)elapsedMs);
         }
 
         private static GUIStyle _subHeaderStyle;

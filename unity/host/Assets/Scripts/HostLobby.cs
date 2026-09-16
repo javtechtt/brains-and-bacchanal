@@ -5,6 +5,9 @@ using System.Threading.Tasks;
 using UnityEngine;
 using BrainsAndBacchanal.Net;
 using BrainsAndBacchanal.Protocol;
+// Aliased, not imported wholesale: System.Diagnostics.Debug would collide with
+// UnityEngine.Debug the moment anything in this file logs.
+using Stopwatch = System.Diagnostics.Stopwatch;
 using BrainsAndBacchanal.Util;
 
 namespace BrainsAndBacchanal
@@ -48,6 +51,22 @@ namespace BrainsAndBacchanal
         /// of its own.
         /// </summary>
         private HostGameSnapshot _game;
+
+        /// <summary>
+        /// When the current game snapshot arrived.
+        ///
+        /// A running timer emits no events, so the Host interpolates its
+        /// countdown from this instant rather than showing a value that only
+        /// changes when something else happens. See DisplayRemainingMs.
+        ///
+        /// Uses Stopwatch, NOT Time.realtimeSinceStartup: this is stamped inside
+        /// an async continuation that runs on a thread-pool thread (the whole
+        /// client is ConfigureAwait(false)), and Unity's Time API may only be
+        /// read on the main thread. Stopwatch is monotonic and thread-safe, and
+        /// unlike DateTime it cannot jump if the system clock is adjusted
+        /// mid-game.
+        /// </summary>
+        private long _gameSnapshotAtTicks;
 
         private string _roomCode = "";
         private string _hostToken = "";
@@ -303,7 +322,12 @@ namespace BrainsAndBacchanal
             if (ack == null || !ack.ok || string.IsNullOrEmpty(ack.snapshotJson)) return;
 
             var snapshot = JsonUtility.FromJson<HostGameSnapshot>(ack.snapshotJson);
-            if (snapshot != null) _game = snapshot;
+            if (snapshot == null) return;
+
+            _game = snapshot;
+            // Stamped alongside the SAME assignment, so interpolation always
+            // measures from the moment this snapshot's remainingMs was true.
+            _gameSnapshotAtTicks = Stopwatch.GetTimestamp();
         }
 
         /// <summary>

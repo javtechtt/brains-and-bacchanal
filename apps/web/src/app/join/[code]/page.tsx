@@ -107,15 +107,13 @@ export default function JoinPage() {
       .then(async () => {
         const stored = loadIdentity(roomCode);
         if (stored !== null) {
+          // resumeIdentity re-reads the game snapshot itself, so a refresh
+          // mid-game comes back INTO the game rather than to a waiting screen.
           const ack = await client.resumeIdentity(stored);
           if (!ack.ok) {
             // Credential rejected: left, removed, or the server restarted and
             // lost every room. Fall through to the join form.
             setError(null);
-          } else {
-            // A refresh mid-game must come back INTO the game, not to a
-            // waiting screen that says nothing is happening.
-            await client.refreshGameSnapshot();
           }
         }
       })

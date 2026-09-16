@@ -312,6 +312,20 @@ export class BrowserRoomClient {
 
     const payload = ack.snapshot as { snapshot: LobbySnapshot };
     this.#handlers.onSnapshot(payload.snapshot);
+
+    // Re-read the GAME too, not just the lobby.
+    //
+    // RECONNECT_PLAYER answers with a lobby snapshot, which carries no game
+    // state. Without this, a phone that dropped mid-game came back holding the
+    // snapshot it had BEFORE the disconnect — where the game was not yet paused
+    // — so its local countdown carried on ticking on that one screen while
+    // every other client correctly showed the game stopped. It only corrected
+    // itself when the Host resumed and an event finally arrived.
+    //
+    // Doing it here rather than at each call site covers every reconnect path,
+    // including the automatic retry after a dropped socket, which is exactly
+    // the path that showed the bug.
+    await this.refreshGameSnapshot();
     return ack;
   }
 

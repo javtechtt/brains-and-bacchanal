@@ -109,6 +109,33 @@ server never leaves empty (`challengeType`, `challenges`). **Any future nullable
 object on the wire needs the same treatment** — `x != null` is not a null check
 in a JsonUtility DTO.
 
+`HeadlessRound3Check.cs` covers **Round 3** (Phase 7B): the four challenges in
+order, the challenge-win counter, Think Fast's turn order and elimination,
+game-supplied content items, the target-does-not-resolve rule, BB paid only by
+Think Fast and Sing a Song, and the rock-paper-scissors tiebreaker with its
+secrecy.
+
+```
+Unity.exe -batchmode -quit -nographics -projectPath unity/host   -executeMethod BrainsAndBacchanal.EditorTools.HeadlessRound3Check.Run
+```
+
+#### A SECOND JsonUtility trap: it cannot deserialise a dictionary
+
+Phase 7A found that JsonUtility cannot represent a null class field. Round 3
+found the other half: **it has no dictionary support at all.**
+
+The challenge scores and the challenge-win counter are keyed objects on the
+wire, which the web reads directly. In C# they arrive as **nothing** — so every
+score on the TV would have read zero while the server held the real numbers,
+silently, and only during a live game.
+
+The fix is a parallel list beside each Record (`scoreList`, `challengeWinList`,
+`revealedChoices`), built from the same source so the two cannot disagree. This
+check asserts the lists are **populated**, not merely present — an empty array
+would pass a null check and still show zeros.
+
+**Any future per-team map on the wire needs the same treatment.**
+
 ### The QR encoder is hand-written, and verified by decoding
 
 Unity ships no QR encoder, and D-014 deliberately avoids third-party C# packages

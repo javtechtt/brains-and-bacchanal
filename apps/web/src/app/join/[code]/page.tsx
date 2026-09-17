@@ -70,6 +70,9 @@ const GAME_EVENT_PREFIXES = [
   // and a plain ROUND_COMPLETE all match without anyone having to remember
   // this list again.
   'ROUND',
+  // Phase 7B — the rock-paper-scissors tiebreaker is its own event family.
+  'RPS_',
+  'THINK_FAST_',
 ];
 
 /**

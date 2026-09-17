@@ -28,6 +28,12 @@ locked order, the two-step Host winner flow, and the development entry that
 exists only because Round 1 does not. They are specified in **`docs/ROUND_2.md`**
 and listed under [Phase 7A messages](#phase-7a-messages-round-2) below.
 
+Phase 7B adds the **Round 3** messages: the four challenges, challenge points,
+the challenge-win counter, Think Fast's turn and elimination, game-supplied
+content items, and the rock-paper-scissors tiebreaker. They are specified in
+**`docs/ROUND_3.md`** and listed under
+[Phase 7B messages](#phase-7b-messages-round-3) below.
+
 Other round-specific intents (`BUZZ`, question allocation, a Family Feud board)
 are still **not** defined. They belong to the rest of Phase 7, and several depend
 on rules still open in `OPEN_RULES.md`.
@@ -445,6 +451,56 @@ puts on a TV.
 
 It is `null` in every other round. A later round adds its own field rather than
 reusing this one.
+
+## Phase 7B messages (Round 3)
+
+Specified in `docs/ROUND_3.md`.
+
+### Intents
+
+| Intent | Payload | Notes |
+|---|---|---|
+| `HOST_PREPARE_ROUND3_CHALLENGE` | *(none)* | Takes no type; the round hands out the next in order |
+| `HOST_NEXT_ROUND3_ITEM` | *(none)* | **Reads no content.** The game supplies items (§13) |
+| `HOST_AWARD_ROUND3_POINT` | `teamId` | One challenge point. **Never BB** |
+| `HOST_THINK_FAST_VALID` | *(none)* | The turn passes on |
+| `HOST_THINK_FAST_ELIMINATE` | *(none)* | The current team is out of this challenge |
+| `HOST_CONFIRM_ROUND3_CHALLENGE` | `teamId` | Resolves it. Carries no amount |
+| `SUBMIT_RPS_CHOICE` | `choice` | **PLAYER intent.** The team comes from the connection |
+| `DEV_START_ROUND3` | *(none)* | **Development only** |
+
+### Events
+
+`ROUND3_STARTED`, `ROUND3_CHALLENGE_PREPARED`, `ROUND3_ITEM_REVEALED`,
+`ROUND3_POINT_AWARDED`, `THINK_FAST_TURN_CHANGED`,
+`THINK_FAST_TEAM_ELIMINATED`, `ROUND3_CHALLENGE_RESOLVED`,
+`ROUND3_COUNTER_CHANGED`, `RPS_STARTED`, `RPS_CHOICE_SUBMITTED`,
+`RPS_REVEALED`, `ROUND3_WINNER_CONFIRMED`, `ROUND3_COMPLETED`.
+
+`RPS_CHOICE_SUBMITTED` carries **who** chose, never **what** — the same split
+`CLASH_RESPONSE_RECEIVED` uses, through a separate type.
+
+### Three counters, never collapsed
+
+`Round3StateView` carries challenge points, the challenge-win counter and BB as
+three separate things. Five logos is ONE round win, not five, and not BB
+(`GAME_RULES_LOCKED.md` §13). The counter is **never** written to the BB ledger.
+
+### Per-team counts travel twice, on purpose
+
+`scores`, `challengeWins` and the revealed `choices` each ship as a keyed
+`Record` **and** as a parallel list (`scoreList`, `challengeWinList`,
+`revealedChoices`).
+
+**Unity's JsonUtility has no dictionary support**, so a keyed object arrives as
+nothing — silently. The web reads the Record, Unity reads the list, and both are
+built from one source so they cannot disagree. See `docs/ROUND_3.md`.
+
+### The session view gains one more field
+
+`GameSessionView.round3`, null in every other round. The player snapshot rebuilds
+it scoped to the asking team so `tiebreaker.yourChoice` carries that team's own
+throw and nobody else's.
 
 ## Event history
 

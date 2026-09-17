@@ -13,6 +13,10 @@ import {
   ROUND2_CHALLENGES,
   ROUND2_EVENTS,
   ROUND2_ROUND_INDEX,
+  ROUND3_CHALLENGES,
+  ROUND3_EVENTS,
+  ROUND3_ROUND_INDEX,
+  isRpsChoice,
   type CardChallengeKind,
   type HostDealTemplate,
   type MarketItem,
@@ -34,6 +38,8 @@ import {
   type Result,
   type RoomId,
   type Round2StateView,
+  type Round3ContentItem,
+  type Round3StateView,
   type SequenceNumber,
   type TeamId,
   type TimerView,
@@ -41,6 +47,7 @@ import {
   NO_TURN,
 } from '@bb/protocol';
 import { Round2 } from './round2.js';
+import { Round3 } from './round3.js';
 import { BbLedger } from './bb-ledger.js';
 import type { Clock } from './clock.js';
 import type { EventLog } from './event-log.js';
@@ -163,6 +170,8 @@ export class GameEngine {
    * to it.
    */
   #round2: Round2 | null = null;
+  /** Round 3 progression, once the round is entered. Null otherwise. */
+  #round3: Round3 | null = null;
   /**
    * Players whose participation the CURRENT challenge requires.
    *
@@ -271,6 +280,9 @@ export class GameEngine {
       // a TV. Nothing secret travels here; §21's secrets stay in the Phase 6
       // views.
       round2: this.round2View(),
+      // Phase 7B. Null outside Round 3. The team-scoped variant is built by the
+      // room, which knows who is asking; this default hides every RPS choice.
+      round3: this.round3View(),
     };
   }
 
@@ -938,6 +950,9 @@ export class GameEngine {
     this.#pausedAt = this.#clock.now();
     this.#pausedByPlayerId = pausedByPlayerId;
     this.#timer.pause();
+    // Phase 7B — a Round 3 item window freezes with the game too, for the same
+    // reason and by the same mechanism.
+    this.#round3?.pauseItemWindow();
     // The Clash's 6-second window is a deadline like any other: a team must not
     // lose its chance to counter because someone's phone died. D-011.
     this.#shared.clash.pause();
@@ -977,6 +992,7 @@ export class GameEngine {
     // The timer picks up with exactly the time it had — the paused stretch is
     // banked and excluded from elapsed time.
     this.#timer.resume();
+    this.#round3?.resumeItemWindow();
     this.#shared.clash.resume();
 
     return ok({
@@ -1838,6 +1854,392 @@ export class GameEngine {
     });
   }
 
+
+  // -------------------------------------------------------------------------
+  // Round 3. Phase 7B.
+  //
+  // GAME_RULES_LOCKED.md §13-§18, D-031.
+  //
+  // Structurally the same bet as Round 2 — the round is a cursor, the engine
+  // keeps the phase, the ledger and the shared systems — but Round 3 genuinely
+  // owns more: challenge points, a challenge-win counter, content items, Think
+  // Fast's turn order and the rock-paper-scissors tiebreaker.
+  //
+  // THREE COUNTERS, NEVER COLLAPSED (§13): challenge points decide ONE
+  // challenge; the challenge-win counter decides the ROUND; BB is the game's
+  // score, and only Think Fast and Sing a Song pay any.
+  // -------------------------------------------------------------------------
+
+  get round3(): Round3 | null {
+    return this.#round3;
+  }
+
+  round3View(forTeam: TeamId | null = null): Round3StateView | null {
+    return this.#round3 === null ? null : this.#round3.view(forTeam);
+  }
+
+  /**
+   * The previous round's standings, best first.
+   *
+   * GAME_RULES_LOCKED.md §1 / D-031 — winning a round means holding the most
+   * total BB when it ends. Round 2 records per-challenge winners but no
+   * placement, so rather than invent one the owner chose the measure the game
+   * already has.
+   *
+   * Ties break by the order the game was started with, so the result is
+   * deterministic rather than dependent on Map iteration order.
+   */
+  standingsByBb(): readonly TeamId[] {
+    const order = [...this.#teams.keys()];
+    return order
+      .map((id) => asTeamId(id))
+      .sort((a, b) => {
+        const diff = this.balanceOf(b) - this.balanceOf(a);
+        if (diff !== 0) return diff;
+        return order.indexOf(a) - order.indexOf(b);
+      });
+  }
+
+  /** Enter Round 3, carrying the previous round's standings in. */
+  beginRound3(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    if (this.#roundIndex !== ROUND3_ROUND_INDEX) {
+      return err(
+        rejection('WRONG_STATE', 'The game is not on Round 3.', {
+          roundIndex: this.#roundIndex,
+          expected: ROUND3_ROUND_INDEX,
+        }),
+      );
+    }
+    if (this.#round3 !== null) {
+      return err(rejection('WRONG_STATE', 'Round 3 has already started.'));
+    }
+
+    const round = new Round3({ clock: this.#clock, mintId: this.#options.mintId });
+    const previousRoundOrder = this.standingsByBb();
+    const began = round.begin({
+      teamIds: [...this.#teams.keys()].map((id) => asTeamId(id)),
+      previousRoundOrder,
+    });
+    if (!began.ok) return err(began.error);
+
+    this.#round3 = round;
+
+    return ok({
+      type: ROUND3_EVENTS.ROUND3_STARTED,
+      payload: {
+        roundIndex: ROUND3_ROUND_INDEX,
+        challenges: ROUND3_CHALLENGES,
+        previousRoundOrder,
+        round3: round.view(),
+      },
+    });
+  }
+
+  /** Prepare the next Round 3 challenge, in the locked order. */
+  prepareRound3Challenge(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round3;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 3 has not started.'));
+
+    const next = round.nextToPrepare();
+    if (!next.ok) return err(next.error);
+
+    const prepared = this.prepareChallenge({ challengeType: next.value.challengeType });
+    if (!prepared.ok) return err(prepared.error);
+
+    const challenge = this.#challenge;
+    /* c8 ignore next 3 -- unreachable: prepareChallenge just succeeded. */
+    if (challenge === null) {
+      return err(rejection('WRONG_STATE', 'The challenge was not created.'));
+    }
+
+    const marked = round.markPrepared(challenge.challengeId);
+    if (!marked.ok) return err(marked.error);
+
+    return ok({
+      type: ROUND3_EVENTS.ROUND3_CHALLENGE_PREPARED,
+      payload: {
+        challengeId: challenge.challengeId,
+        challengeType: marked.value.challengeType,
+        displayName: marked.value.displayName,
+        order: marked.value.order,
+        format: marked.value.format,
+        targetScore: marked.value.targetScore,
+        cardChallengeKind: marked.value.cardChallengeKind,
+        challenge: this.challengeView(),
+        round3: round.view(),
+      },
+    });
+  }
+
+  /**
+   * Reveal the next content item.
+   *
+   * THE ITEM COMES FROM THE CALLER — §13, the game supplies challenge content.
+   * The engine neither stores a pack nor chooses an item; it records which one
+   * is on screen and starts its window.
+   */
+  revealRound3Item(item: Round3ContentItem): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round3;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 3 has not started.'));
+
+    const revealed = round.revealItem(item);
+    if (!revealed.ok) return err(revealed.error);
+
+    return ok({
+      type: ROUND3_EVENTS.ROUND3_ITEM_REVEALED,
+      payload: {
+        // ONLY the current item. No queue, no total, no accepted answer.
+        item: revealed.value,
+        round3: round.view(),
+      },
+    });
+  }
+
+  /** Award one challenge point. Points, never BB. */
+  awardRound3Point(teamId: TeamId): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round3;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 3 has not started.'));
+    if (!this.#teams.has(teamId)) {
+      return err(rejection('NOT_FOUND', 'Unknown team.', { teamId }));
+    }
+
+    const awarded = round.awardPoint(teamId);
+    if (!awarded.ok) return err(awarded.error);
+
+    return ok({
+      type: ROUND3_EVENTS.ROUND3_POINT_AWARDED,
+      payload: {
+        teamId,
+        challenge: awarded.value,
+        // No BB moved, and the event carries nothing that looks like it did.
+        round3: round.view(),
+      },
+    });
+  }
+
+  /** Think Fast: the current team answered validly. §14. */
+  thinkFastValid(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round3;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 3 has not started.'));
+
+    const advanced = round.thinkFastValid();
+    if (!advanced.ok) return err(advanced.error);
+
+    return ok({
+      type: ROUND3_EVENTS.THINK_FAST_TURN_CHANGED,
+      payload: { thinkFast: advanced.value, round3: round.view() },
+    });
+  }
+
+  /** Think Fast: the current team is out of this challenge. §14. */
+  thinkFastEliminate(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round3;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 3 has not started.'));
+
+    const before = round.view().current?.thinkFast?.currentTeamId ?? null;
+    const eliminated = round.thinkFastEliminate();
+    if (!eliminated.ok) return err(eliminated.error);
+
+    return ok({
+      type: ROUND3_EVENTS.THINK_FAST_TEAM_ELIMINATED,
+      payload: {
+        teamId: before,
+        thinkFast: eliminated.value,
+        round3: round.view(),
+      },
+    });
+  }
+
+  /**
+   * Confirm the challenge winner: resolve it, pay any BB, and increment the
+   * challenge-win counter exactly once.
+   *
+   * A SCORE NEVER RESOLVES A CHALLENGE — §15-§17 give the Host discretion to
+   * confirm before or after the target, so this is always required.
+   */
+  confirmRound3Challenge(winningTeamId: TeamId): Result<{
+    readonly change: EngineChange;
+    readonly ledgerEntries: readonly BbLedgerEntry[];
+  }> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round3;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 3 has not started.'));
+    if (!this.#teams.has(winningTeamId)) {
+      return err(rejection('NOT_FOUND', 'Unknown team.', { teamId: winningTeamId }));
+    }
+
+    const pending = round.prepareConfirmation(winningTeamId);
+    if (!pending.ok) return err(pending.error);
+
+    const { definition, baseRewardBb } = pending.value;
+
+    // The multiplier is READ from the shared system, never computed here — and
+    // for Guess the Logo and All Answers Begin With the base is 0, so doubling
+    // nothing is still nothing. Double It is NOT given a counter meaning,
+    // because no locked rule defines one (D-031).
+    const doubled = this.#shared.isDoubledFor(winningTeamId);
+    const award = this.#shared.applyMultiplier(winningTeamId, baseRewardBb);
+    const reallyDoubled = doubled && award > 0;
+
+    const resolved = this.resolveChallenge({
+      winningTeamIds: [winningTeamId],
+      // A zero award still goes through the ledger path, which writes a
+      // zero-delta entry. One path means a BB-paying and a non-paying challenge
+      // cannot drift apart.
+      bbDeltas: { [winningTeamId]: award },
+      decidedByHost: true,
+      completion: 'completed',
+      note: `${definition.displayName}${reallyDoubled ? ' (Double It)' : ''}`,
+    });
+    if (!resolved.ok) return err(resolved.error);
+
+    const applied = resolved.value.change.payload['result'] as GameChallengeResult;
+    const awarded = applied.bbApplied[winningTeamId] ?? 0;
+
+    const view = round.recordChallengeResult({
+      winningTeamId,
+      awardedBb: awarded,
+      doubled: reallyDoubled,
+    });
+
+    return ok({
+      change: {
+        type: ROUND3_EVENTS.ROUND3_CHALLENGE_RESOLVED,
+        payload: {
+          challengeId: pending.value.challengeId,
+          challengeType: definition.challengeType,
+          displayName: definition.displayName,
+          winningTeamId,
+          baseRewardBb,
+          awardedBb: awarded,
+          doubled: reallyDoubled,
+          challengeResult: applied,
+          teams: this.teams(),
+          round3: round.view(),
+          roundComplete: round.complete,
+          resolvedChallenge: view,
+        },
+      },
+      ledgerEntries: resolved.value.ledgerEntries,
+    });
+  }
+
+  /**
+   * Decide the Round 3 winner after the fourth challenge.
+   *
+   * One leader wins outright; tied leaders go to rock-paper-scissors (§18),
+   * which this starts rather than resolving on their behalf.
+   *
+   * NO BB IS AWARDED for winning Round 3 — no locked rule grants any (D-031).
+   */
+  decideRound3Winner(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round3;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 3 has not started.'));
+
+    const decided = round.decideWinner();
+    if (!decided.ok) return err(decided.error);
+
+    if (decided.value.needsTiebreaker) {
+      return ok({
+        type: ROUND3_EVENTS.RPS_STARTED,
+        payload: {
+          tiedTeamIds: decided.value.leaders,
+          tiebreaker: round.tiebreakerView(null),
+          round3: round.view(),
+        },
+      });
+    }
+
+    return ok({
+      type: ROUND3_EVENTS.ROUND3_WINNER_CONFIRMED,
+      payload: {
+        winningTeamId: decided.value.winningTeamId,
+        challengeWins: round.view().challengeWins,
+        round3: round.view(),
+      },
+    });
+  }
+
+  /** A tied team locks its rock-paper-scissors choice. §18. */
+  submitRpsChoice(input: {
+    readonly teamId: TeamId;
+    readonly choice: string;
+  }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round3;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 3 has not started.'));
+    if (!isRpsChoice(input.choice)) {
+      return err(
+        rejection('INVALID_REQUEST', 'Choice must be ROCK, PAPER or SCISSORS.', {
+          choice: input.choice,
+        }),
+      );
+    }
+
+    const submitted = round.submitRpsChoice(input.teamId, input.choice);
+    if (!submitted.ok) return err(submitted.error);
+
+    return ok({
+      type: ROUND3_EVENTS.RPS_CHOICE_SUBMITTED,
+      payload: {
+        // WHO chose, never WHAT. §18.
+        teamId: input.teamId,
+        submittedTeamIds: submitted.value.submittedTeamIds,
+        tiebreaker: round.tiebreakerView(null),
+      },
+    });
+  }
+
+  /**
+   * Reveal a rock-paper-scissors attempt once every tied team has chosen.
+   *
+   * Polled like the Clash, for the same reason: this package owns no wall
+   * clock. Returns null when nothing is due.
+   */
+  pollRpsResolution(): EngineChange | null {
+    if (!this.#started || this.paused) return null;
+    const round = this.#round3;
+    if (round === null || !round.allRpsChoicesIn()) return null;
+
+    const resolved = round.resolveRps();
+    if (!resolved.ok) return null;
+
+    return {
+      type: ROUND3_EVENTS.RPS_REVEALED,
+      payload: {
+        attempt: resolved.value,
+        tiebreaker: round.tiebreakerView(null),
+        round3: round.view(),
+        winningTeamId: round.winningTeamId,
+      },
+    };
+  }
+
   /**
    * DEVELOPMENT ONLY — walk the engine from game start to the Round 2 intro.
    *
@@ -1937,6 +2339,81 @@ export class GameEngine {
     }
 
     const began = this.beginRound2();
+    if (!began.ok) return err(began.error);
+    changes.push(began.value);
+
+    return ok(changes);
+  }
+
+  /**
+   * DEVELOPMENT ONLY — walk the engine from game start to the Round 3 intro.
+   *
+   * Same discipline as `devEnterRound2`: real transitions, a clearly-named
+   * placeholder challenge per skipped round, and the SAME `beginRound3` that a
+   * real Round 2 completion will eventually call. Nothing assigns a phase.
+   *
+   * Round 2 is implemented, so a game may already have played it — this starts
+   * from wherever the round counter actually is and walks forward.
+   */
+  devEnterRound3(): Result<readonly EngineChange[]> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    if (!this.#options.devTools) {
+      return err(
+        rejection('ILLEGAL_ACTION', 'Development controls are disabled on this server.'),
+      );
+    }
+    if (this.#round3 !== null) {
+      return err(rejection('WRONG_STATE', 'Round 3 has already started.'));
+    }
+    if (this.#roundIndex > ROUND3_ROUND_INDEX) {
+      return err(
+        rejection('WRONG_STATE', 'The game is already past Round 3.', {
+          roundIndex: this.#roundIndex,
+        }),
+      );
+    }
+
+    const changes: EngineChange[] = [];
+
+    while (this.#roundIndex < ROUND3_ROUND_INDEX) {
+      if (this.#phase.phase === 'ROUND_INTRO') {
+        const intro = this.advancePhase('CHALLENGE_INTRO');
+        if (!intro.ok) return err(intro.error);
+        changes.push(intro.value);
+
+        const prepared = this.prepareChallenge({
+          challengeType: DEV_ROUND_SKIP_CHALLENGE_TYPE,
+        });
+        if (!prepared.ok) return err(prepared.error);
+        changes.push(prepared.value);
+
+        const started = this.startChallenge();
+        if (!started.ok) return err(started.error);
+        changes.push(started.value);
+
+        const resolved = this.resolveChallenge({
+          completion: 'abandoned',
+          decidedByHost: true,
+          note: 'Development: skipped to Round 3.',
+        });
+        if (!resolved.ok) return err(resolved.error);
+        changes.push(resolved.value.change);
+      }
+
+      if (this.#phase.phase !== 'ROUND_COMPLETE') {
+        const complete = this.advancePhase('ROUND_COMPLETE');
+        if (!complete.ok) return err(complete.error);
+        changes.push(complete.value);
+      }
+
+      const next = this.advancePhase('ROUND_INTRO');
+      if (!next.ok) return err(next.error);
+      changes.push(next.value);
+    }
+
+    const began = this.beginRound3();
     if (!began.ok) return err(began.error);
     changes.push(began.value);
 

@@ -267,6 +267,22 @@ namespace BrainsAndBacchanal
                 case Round2Events.WinnerSelected:
                 case Round2Events.ChallengeResolved:
                 case Round2Events.RoundCompleted:
+                // Phase 7B — Round 3 and the rock-paper-scissors tiebreaker.
+                // The prefix fallback below would catch these anyway; they are
+                // named for documentation, as the Phase 7A cases are.
+                case Round3Events.RoundStarted:
+                case Round3Events.ChallengePrepared:
+                case Round3Events.ItemRevealed:
+                case Round3Events.PointAwarded:
+                case Round3Events.ThinkFastTurnChanged:
+                case Round3Events.ThinkFastTeamEliminated:
+                case Round3Events.ChallengeResolved:
+                case Round3Events.CounterChanged:
+                case Round3Events.RpsStarted:
+                case Round3Events.RpsChoiceSubmitted:
+                case Round3Events.RpsRevealed:
+                case Round3Events.WinnerConfirmed:
+                case Round3Events.RoundCompleted:
                     _lastEvent = envelope.type;
                     _ = RefreshGameSnapshotAsync();
                     break;
@@ -330,7 +346,7 @@ namespace BrainsAndBacchanal
             "GAME_", "BB_", "CHALLENGE_", "TURN_", "TIMER_", "ACTIVE_PLAYERS_",
             "HOST_RULING", "PHASE_", "REVIEW_", "BACCHANAL_", "CARD_", "CLASH_",
             "PART_DAT_FIGHT", "MARKET_", "MACO_MAIL_", "ADVANTAGE_",
-            "HELD_EFFECT_", "HOST_DEAL_", "WAGER_", "ROUND",
+            "HELD_EFFECT_", "HOST_DEAL_", "WAGER_", "ROUND", "RPS_", "THINK_FAST_",
         };
 
         // -------------------------------------------------------------------
@@ -705,6 +721,9 @@ namespace BrainsAndBacchanal
                 // the two test instruments beside it. Still functional rather
                 // than finished; Phase 8 does the theatre.
                 DrawRound2Panel(snapshot, game);
+                GUILayout.Space(24);
+                // Phase 7B — Round 3.
+                DrawRound3Panel(snapshot, game);
                 GUILayout.EndHorizontal();
             }
 

@@ -4,6 +4,7 @@ import { DEFAULT_TEAM_LABELS, type PlayerGameSnapshot } from '@bb/protocol';
 import { useEffect, useState } from 'react';
 import type { ConnectionStatus } from './client';
 import { PlayerRound2 } from './PlayerRound2';
+import { PlayerRound3 } from './PlayerRound3';
 import { PlayerSharedSystems } from './PlayerSharedSystems';
 import * as ui from './ui';
 
@@ -99,6 +100,16 @@ export function PlayerGame({
             this screen. */}
         {game?.round2 !== null && game?.round2 !== undefined && (
           <PlayerRound2 round2={game.round2} yourTeamId={teamId} />
+        )}
+
+        {/* PHASE 7B — Round 3. Null in every other round. */}
+        {game?.round3 !== null && game?.round3 !== undefined && (
+          <PlayerRound3
+            round3={game.round3}
+            yourTeamId={teamId}
+            paused={paused}
+            {...(submit === undefined ? {} : { submit })}
+          />
         )}
 
         {/* Other teams' balances. Not secret — a party game shows the scores —

@@ -279,7 +279,21 @@ describes one container's lifecycle; Round 2's progress describes the ROUND's
 position through its four games — the thing a display needs to say "3 of 4".
 
 **`ROUND_COMPLETE` is where Phase 7A stops.** `ROUND_COMPLETE → ROUND_INTRO` is
-already legal and Round 3 will use it, but nothing in Phase 7A takes it.
+already legal and Round 3 uses it.
+
+### Phase 7B adds no phase either
+
+Round 3 runs on the same table. It adds three things the engine did not have —
+a per-challenge score, a round-level counter, and a rock-paper-scissors
+tiebreaker — and **none of them is a phase**:
+
+- challenge points live on the challenge and reset with it,
+- the challenge-win counter lives on the round,
+- the tiebreaker is a series of attempts inside `ROUND_COMPLETE`, resolved by
+  the server's tick once every tied team has chosen.
+
+The 10-second item window is a `Deadline` like every other, so it pauses with
+the game (D-011) and is **polled**, not scheduled.
 
 ## What intentionally remains undefined
 

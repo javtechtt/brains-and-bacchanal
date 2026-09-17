@@ -37,6 +37,7 @@ Implementation references (generated during development, not rule sources):
 - `docs/NETWORK_BENCHMARK.md`
 - `docs/UNITY_HOST.md`
 - `docs/ROUND_2.md`
+- `docs/ROUND_3.md`
 
 These repo files override older PDFs, DOCX files, screenshots, or previous AI-generated plans unless the project owner explicitly says otherwise.
 
@@ -214,7 +215,8 @@ After each major task, report:
 
 ## Current Phase
 
-**Phases 1–6 are complete, and Phase 7A (Round 2) is complete.**
+**Phases 1–6 are complete. Phase 7A (Round 2) and Phase 7B (Round 3) are
+complete.**
 
 - Phase 1 — Project Foundation
 - Phase 2 — Protocol + Generic Game State
@@ -223,8 +225,9 @@ After each major task, report:
 - Phase 5 — Generic Authoritative Engine (`docs/GAME_ENGINE.md`)
 - Phase 6 — Shared Systems (`docs/SHARED_SYSTEMS.md`)
 - Phase 7A — Round 2, "Shake Up Yuhself!" (`docs/ROUND_2.md`)
+- Phase 7B — Round 3 (`docs/ROUND_3.md`)
 
-Next is **Phase 7B** from `docs/DEVELOPMENT_ROADMAP.md`.
+Next is **Phase 7C** from `docs/DEVELOPMENT_ROADMAP.md`.
 **Do not begin it without the project owner asking.**
 
 Do not jump ahead to full gameplay.
@@ -242,6 +245,25 @@ supplies those from locked rules — not from the engine's shape.
 
 The mid-game **Host disconnect** rule is still open: connection loss is recorded
 and play is left exactly as it was.
+
+### Phase 7B leaves these deliberately undecided
+
+Round 3 is implemented. Three counters are kept strictly separate — challenge
+points decide one challenge, a challenge-win counter decides the round, and BB
+is the game's score (`GAME_RULES_LOCKED.md` §13). Five logos is ONE round win,
+not five, and not BB.
+
+Still undecided, and not to be invented:
+
+- **The Think Fast answer timer**, and what a timeout means there
+  (`OPEN_RULES.md` §2). Nothing starts a Think Fast timer, and a timeout hands
+  the challenge to the Host rather than eliminating anyone (D-022).
+- **What Double It means for a counter.** It doubles BB, one per challenge, as
+  always. Where a Round 3 challenge pays no BB it has nothing to double, and it
+  is NOT given a counter meaning.
+- **BB for winning Round 3.** No locked rule grants any.
+- **A production content pipeline.** The `Round3ContentSource` seam exists and
+  TEST content fills it; the Host never types challenge content (§13).
 
 ### Phase 7A leaves these deliberately undecided
 
@@ -280,8 +302,7 @@ The generic wager is a primitive with **no Family Feud board**, deliberately.
 stood since Phase 4 is closed.
 
 **The code has not caught up, deliberately.** `CARD_ELIGIBILITY.ROUND1_TRIVIA`
-still has no MACO entry, because Round 1 is not implemented and Phase 7B is
-Round 3. When Round 1 is built:
+still has no MACO entry, because Round 1 is not implemented. When it is built:
 
 - add `MACO` to that row — `CARDS_WITHOUT_LEGAL_CHALLENGE` empties itself,
 - the Phase 6 test asserting Maco is unplayable **will fail**. That failure is

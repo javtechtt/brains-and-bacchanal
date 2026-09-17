@@ -191,27 +191,31 @@ intended Host experience.
 **Nothing in `OPEN_RULES.md` was resolved.** Maco! is still unplayable (§7), and
 Round 1's allocation (§1) is what forced the development entry.
 
-### Round 3 — rules locked, NOT implemented ◀ NEXT
+### Round 3 ✅ COMPLETE (Phase 7B)
 
-**The rules are now locked** (D-031, `GAME_RULES_LOCKED.md` §13–§18), closing
-`OPEN_RULES.md` §3, §4, §5 and §6:
+Built:
+- four challenges in the locked order: Think Fast, Guess the Logo, All Answers
+  Begin With, Sing a Song,
+- a **challenge-win counter** that decides the round, kept strictly separate
+  from challenge points and from BB,
+- BB exactly where the locked rules put it — Think Fast 500, Sing a Song 500,
+  the other two none; winning the round pays none,
+- Host discretion: targets of 5/5/3 are hints, and the Host confirms every
+  challenge winner before or after them,
+- Think Fast elimination with turn order from the previous round's standings,
+- a **content source** seam — the game supplies every topic, logo, letter and
+  scenario; the Host never types content,
+- the **rock-paper-scissors tiebreaker** (§18), hidden until every tied team has
+  chosen, and explicitly not a Bacchanal Clash,
+- Round 3 state on both snapshots, the Unity Host view and the player screen,
+- a development-only entry, because Rounds 1 and 2 may not have been played.
 
-- four challenges in order: Think Fast, Guess the Logo, All Answers Begin With,
-  Sing a Song,
-- a **Round 3 challenge-win counter** (+1 per challenge) decides the round;
-  BB stays exactly where the locked rules already put it — Think Fast 500,
-  Sing a Song 500, the other two none,
-- winning Round 3 overall awards **no BB**,
-- targets: 5 logos, 5 prompts, 3 songs — but the **Host confirms** the winner and
-  may end earlier or later,
-- 10-second window per item,
-- **Think Fast order comes from the previous round's standings** (most total BB),
-  no longer rock-paper-scissors,
-- an overall counter tie is broken by **real rock-paper-scissors**, not a Clash,
-- the **game supplies challenge content**; the Host does not invent it.
+All implemented. See `docs/ROUND_3.md`.
 
-Still open: the Think Fast answer timer and what a timeout means
-(`OPEN_RULES.md` §2). Keep it configuration-driven.
+Not included, deliberately: the Think Fast answer timer and the meaning of a
+timeout (`OPEN_RULES.md` §2 — still open); any counter meaning for Double It (no
+rule defines one); BB for winning the round; a production content pipeline (the
+seam exists, TEST content fills it); any audio, music or logo recognition.
 
 ### Round 4
 Implement:

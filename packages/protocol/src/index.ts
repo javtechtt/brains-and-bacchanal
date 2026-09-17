@@ -48,6 +48,7 @@ export * from './maco-mail.js';
 export * from './deals.js';
 export * from './shared-systems.js';
 export * from './round2.js';
+export * from './round3.js';
 export * from './snapshot.js';
 export * from './transport.js';
 export * from './benchmark.js';

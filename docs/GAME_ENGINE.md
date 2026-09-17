@@ -467,6 +467,28 @@ contradicting it: the physical game happens in the room, so no player's
 *software* participation is required, and a sleeping phone must not stop the
 party. See `docs/ROUND_2.md`.
 
+## Phase 7B: Round 3 runs on it too
+
+Round 3 is implemented, and like Round 2 it needed no new phase, no second
+challenge container and no second BB path. What it DID add to the engine:
+
+- a `Round3` cursor (null outside Round 3) holding challenge points, the
+  challenge-win counter, Think Fast's turn order and the RPS tiebreaker,
+- `standingsByBb()` — the previous round's order, which §1 defines as "most
+  total BB when the round ends",
+- an injected `Round3ContentSource` on the room, so the GAME supplies challenge
+  content and the Host never types it (§13),
+- a second polled resolver beside the Clash: the RPS reveal fires on the tick
+  once the last tied team has chosen.
+
+**The challenge-win counter never touches the BB ledger.** It is not money, and
+a ledger entry would make it look like money. `GAME_RULES_LOCKED.md` §13.
+
+A Round 3 challenge that awards no BB still goes through `resolveChallenge` with
+a zero delta, so a paying and a non-paying challenge cannot drift apart.
+
+See `docs/ROUND_3.md`.
+
 ## What Phase 5 deliberately did NOT decide
 
 Nothing in `OPEN_RULES.md` is resolved. Specifically:

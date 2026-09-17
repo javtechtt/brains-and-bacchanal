@@ -10,6 +10,7 @@ import type { GamePhase } from './lifecycle.js';
 import type { ChallengeStatus, PauseReason } from './models.js';
 import type { LobbyPlayer, LobbyRoom, TeamMode } from './room.js';
 import type { Round2StateView } from './round2.js';
+import type { Round3StateView } from './round3.js';
 import type { HostSharedSystemsView, PlayerSharedSystemsView } from './shared-systems.js';
 
 /**
@@ -416,6 +417,13 @@ export interface GameSessionView {
    * reusing this one, so no round can inherit another's state by accident.
    */
   readonly round2: Round2StateView | null;
+  /**
+   * Round 3 progression. Phase 7B. Null in every other round.
+   *
+   * Its own field rather than a shared "round" slot, so no round can inherit
+   * another's state by accident — the same reasoning as `round2`.
+   */
+  readonly round3: Round3StateView | null;
 }
 
 /** Why the game is paused and where it returns to. */

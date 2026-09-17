@@ -15,6 +15,7 @@ import {
   ROOM_EVENTS,
   ROOM_INTENTS,
   ROUND2_INTENTS,
+  ROUND3_INTENTS,
   SHARED_INTENTS,
   teamsForMode,
   toPublicPlayer,
@@ -43,6 +44,7 @@ import {
 } from '@bb/protocol';
 import type { Clock } from './clock.js';
 import { EventLog } from './event-log.js';
+import { createTestContentSource, type Round3ContentSource } from './round3-content.js';
 import { GameEngine, type EngineChange, type StartingTeam } from './game-engine.js';
 import { IntentRegistry } from './idempotency.js';
 
@@ -102,6 +104,13 @@ export interface RoomOptions {
    * DEV_ADJUST_BB, whatever a client sends.
    */
   readonly devTools?: boolean;
+  /**
+   * Where Round 3 challenge content comes from. GAME_RULES_LOCKED.md §13.
+   *
+   * Defaults to the TEST source during development. A production deployment
+   * supplies its own; the Host never types content either way.
+   */
+  readonly contentSource?: Round3ContentSource;
 }
 
 /** Result of handling one intent: a reply, events to broadcast, private sends. */
@@ -127,6 +136,8 @@ export class Room {
   readonly #intents = new IntentRegistry();
   readonly #players = new Map<string, LobbyPlayerPrivate>();
   readonly #options: RoomOptions;
+  /** Round 3 content. One per room, so cursors never leak between games. */
+  readonly #content: Round3ContentSource;
   /**
    * The game. Exists from room creation but does nothing until START_GAME,
    * so there is no second object to create — and no window in which a game
@@ -146,6 +157,7 @@ export class Room {
 
   constructor(options: RoomOptions) {
     this.#options = options;
+    this.#content = options.contentSource ?? createTestContentSource();
     this.#clock = options.clock;
     this.#log = new EventLog(options.roomId, options.clock);
     this.#createdAt = options.clock.now();
@@ -332,6 +344,14 @@ export class Room {
       // Phase 6 — an opponent's BB freezes at its Market-open value while the
       // Market is open. See #teamsForPlayer.
       teams: this.#teamsForPlayer(teamId),
+      // Phase 7B — the base view hides every RPS choice. Rebuilt here scoped to
+      // the asking team so `tiebreaker.yourChoice` carries THIS team's own
+      // locked throw and nobody else's. §18, and the same deliberate exception
+      // the Clash makes for `yourClashResponse`.
+      game:
+        base.game === null
+          ? null
+          : { ...base.game, round3: this.#game.round3View(teamId) },
       // Phase 6. Scoped to the caller's OWN team — a player with no team gets
       // null rather than a view of someone else's, and an unidentified
       // connection lands here too (teamId is null), so the narrow path is also
@@ -497,6 +517,25 @@ export class Room {
       events.push(this.#log.append(clash.type, { kind: 'server' }, clash.payload));
     }
 
+    // Phase 7B: the rock-paper-scissors reveal, observed for the same reason.
+    // It fires as soon as the last tied team locks a choice, so the reveal is
+    // simultaneous rather than triggered by whoever happened to act last.
+    const rps = this.#game.pollRpsResolution();
+    if (rps !== null) {
+      events.push(this.#log.append(rps.type, { kind: 'server' }, rps.payload));
+
+      // A resolved tiebreaker decides the round. Appended as its own event so a
+      // client can order "the throw was revealed" against "Round 3 was won".
+      if (this.#game.round3?.winningTeamId !== null && this.#game.round3?.winningTeamId !== undefined) {
+        const decided = this.#game.decideRound3Winner();
+        if (decided.ok) {
+          events.push(
+            this.#log.append(decided.value.type, { kind: 'server' }, decided.value.payload),
+          );
+        }
+      }
+    }
+
     return events;
   }
 
@@ -620,6 +659,27 @@ export class Room {
         return this.#confirmRound2Result(connectionId, intent);
       case ROUND2_INTENTS.DEV_START_ROUND2:
         return this.#devStartRound2(connectionId, intent);
+
+      // --- Phase 7B: Round 3 --------------------------------------------------
+      case ROUND3_INTENTS.HOST_PREPARE_ROUND3_CHALLENGE:
+        return this.#engineAction(connectionId, intent, () =>
+          this.#game.prepareRound3Challenge(),
+        );
+      case ROUND3_INTENTS.HOST_NEXT_ROUND3_ITEM:
+        return this.#nextRound3Item(connectionId, intent);
+      case ROUND3_INTENTS.HOST_AWARD_ROUND3_POINT:
+        return this.#awardRound3Point(connectionId, intent);
+      case ROUND3_INTENTS.HOST_THINK_FAST_VALID:
+        return this.#engineAction(connectionId, intent, () => this.#game.thinkFastValid());
+      case ROUND3_INTENTS.HOST_THINK_FAST_ELIMINATE:
+        return this.#engineAction(connectionId, intent, () => this.#game.thinkFastEliminate());
+      case ROUND3_INTENTS.HOST_CONFIRM_ROUND3_CHALLENGE:
+        return this.#confirmRound3Challenge(connectionId, intent);
+      // The one PLAYER intent in Round 3: a team chooses its own RPS throw.
+      case ROUND3_INTENTS.SUBMIT_RPS_CHOICE:
+        return this.#submitRpsChoice(connectionId, intent);
+      case ROUND3_INTENTS.DEV_START_ROUND3:
+        return this.#devStartRound3(connectionId, intent);
 
       default:
         return this.#reject(rejection('INVALID_REQUEST', 'Unknown intent type.', { type: intent.type }));
@@ -1910,6 +1970,188 @@ export class Room {
         change.payload,
         // Only the first carries the intent id: deduplication keys on it, and
         // two events claiming the same intent would make a retry ambiguous.
+        change === outcome.value[0] ? intent.intentId : undefined,
+      ),
+    );
+
+    const last = events[events.length - 1];
+    return {
+      ack: ok({ seq: last === undefined ? this.#log.latestSeq() : last.seq }),
+      broadcast: events,
+      direct: [],
+      closeConnections: [],
+    };
+  }
+
+
+  // -------------------------------------------------------------------------
+  // Phase 7B — Round 3
+  //
+  // Host-gated except SUBMIT_RPS_CHOICE, which is a player intent because a
+  // team chooses its own rock, paper or scissors. Everything else — awarding a
+  // point, judging an answer, revealing an item, confirming a winner — is
+  // subjective Host authority (§14-§17), so a phone has no route to it.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Reveal the next Round 3 content item.
+   *
+   * THE ITEM COMES FROM THE CONTENT SOURCE, not from the Host's payload. §13 —
+   * the game supplies challenge content and the Host does not invent it. So
+   * this handler reads no prompt, letter or image from the intent; it asks the
+   * room's content source for the next item of the running challenge.
+   */
+  #nextRound3Item(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const round = this.#game.round3;
+    if (round === null) {
+      return this.#reject(rejection('WRONG_STATE', 'Round 3 has not started.'));
+    }
+    const current = round.view().current;
+    if (current === null) {
+      return this.#reject(rejection('WRONG_STATE', 'No Round 3 challenge is running.'));
+    }
+
+    const item = this.#content.nextItem(current.challengeType);
+    if (item === null) {
+      return this.#reject(
+        rejection('NOT_FOUND', 'The content source has no more items for this challenge.', {
+          challengeType: current.challengeType,
+        }),
+      );
+    }
+
+    const outcome = this.#game.revealRound3Item(item);
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /** Host awards one challenge point. Points, never BB. */
+  #awardRound3Point(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const teamId = readString(intent.payload, 'teamId');
+    if (teamId === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing teamId.'));
+    }
+
+    const outcome = this.#game.awardRound3Point(asTeamId(teamId));
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * Host confirms the Round 3 challenge winner.
+   *
+   * NO AMOUNT IS READ FROM THE PAYLOAD. The server takes the reward from
+   * configuration — 500 for Think Fast and Sing a Song, 0 for the other two —
+   * and the multiplier from the shared systems.
+   */
+  #confirmRound3Challenge(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const teamId = readString(intent.payload, 'teamId');
+    if (teamId === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing teamId.'));
+    }
+
+    const outcome = this.#game.confirmRound3Challenge(asTeamId(teamId));
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    this.#touch();
+    const event = this.#log.append(
+      outcome.value.change.type,
+      { kind: 'host', sessionId: '' as never },
+      outcome.value.change.payload,
+      intent.intentId,
+    );
+    for (const entry of outcome.value.ledgerEntries) {
+      this.#game.attachLedgerSeq(entry.entryId, event.seq);
+    }
+
+    const events = [event];
+
+    // The fourth challenge decides the round. Appended as its own event rather
+    // than folded into the resolution, so a client can order "the challenge
+    // ended" against "the round was won" — and so a tiebreaker starting is its
+    // own fact.
+    if (this.#game.round3?.complete === true) {
+      const decided = this.#game.decideRound3Winner();
+      if (decided.ok) {
+        events.push(
+          this.#log.append(
+            decided.value.type,
+            { kind: 'host', sessionId: '' as never },
+            decided.value.payload,
+          ),
+        );
+      }
+    }
+
+    const last = events[events.length - 1];
+    return {
+      ack: ok({ seq: last === undefined ? event.seq : last.seq }),
+      broadcast: events,
+      direct: [],
+      closeConnections: [],
+    };
+  }
+
+  /**
+   * A tied team locks its rock-paper-scissors choice. PLAYER intent.
+   *
+   * THE TEAM COMES FROM THE CONNECTION, never the payload — the same protection
+   * every Phase 6 player intent uses. A phone cannot choose for another team by
+   * naming it, because no handler here reads a client-supplied teamId.
+   *
+   * The choice is echoed back only in this team's OWN acknowledgement; the
+   * broadcast says who chose, never what. §18.
+   */
+  #submitRpsChoice(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const team = this.#requireTeam(connectionId);
+    if (!team.ok) return this.#reject(team.error);
+
+    const choice = readString(intent.payload, 'choice');
+    if (choice === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing choice.'));
+    }
+
+    const outcome = this.#game.submitRpsChoice({ teamId: team.value, choice });
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * DEVELOPMENT ONLY — enter Round 3 without playing Rounds 1 and 2.
+   *
+   * Same gate and the same discipline as `DEV_START_ROUND2` (D-024): it walks
+   * the real transitions and calls the same `beginRound3` a real Round 2
+   * completion will.
+   */
+  #devStartRound3(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    if (!this.#game.devTools) {
+      return this.#reject(
+        rejection('ILLEGAL_ACTION', 'Development controls are disabled on this server.'),
+      );
+    }
+
+    const outcome = this.#game.devEnterRound3();
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    this.#touch();
+    const events = outcome.value.map((change) =>
+      this.#log.append(
+        change.type,
+        { kind: 'host', sessionId: '' as never },
+        change.payload,
         change === outcome.value[0] ? intent.intentId : undefined,
       ),
     );

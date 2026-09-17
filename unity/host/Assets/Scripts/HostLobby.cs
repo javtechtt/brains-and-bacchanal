@@ -38,6 +38,18 @@ namespace BrainsAndBacchanal
 
         public int serverPort = 4000;
 
+        /// <summary>
+        /// Connect over wss:// instead of ws://, with no explicit port.
+        ///
+        /// For a tunnel (Cloudflare Tunnel, ngrok, or a real deployment behind
+        /// TLS): the tunnel terminates TLS on 443 and there is no separate port
+        /// to name, so `serverPort` would be meaningless there. Off by default —
+        /// D-014's raw-WebSocket decision and every LAN party test to date used
+        /// plain ws://, and this field must not change that default behaviour.
+        /// </summary>
+        [Tooltip("Connect over wss:// with no port — for a tunnel or a TLS deployment. Leave off for a LAN party.")]
+        public bool serverUseTls;
+
         private readonly BenchmarkWebSocketClient _client = new BenchmarkWebSocketClient();
 
         private LobbySnapshot _snapshot;
@@ -175,7 +187,14 @@ namespace BrainsAndBacchanal
         // Server actions
         // -------------------------------------------------------------------
 
-        private string SocketUrl => $"ws://{serverHost}:{serverPort}/room/ws";
+        /// <summary>
+        /// Builds ws://host:port/room/ws for a LAN party (the default and
+        /// unchanged behaviour), or wss://host/room/ws with no port for a
+        /// tunnel/TLS deployment when <see cref="serverUseTls"/> is set.
+        /// </summary>
+        private string SocketUrl => serverUseTls
+            ? $"wss://{serverHost}/room/ws"
+            : $"ws://{serverHost}:{serverPort}/room/ws";
 
         private async Task EnsureConnectedAsync()
         {

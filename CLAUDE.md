@@ -36,6 +36,7 @@ Implementation references (generated during development, not rule sources):
 - `docs/SHARED_SYSTEMS.md`
 - `docs/NETWORK_BENCHMARK.md`
 - `docs/UNITY_HOST.md`
+- `docs/ROUND_2.md`
 
 These repo files override older PDFs, DOCX files, screenshots, or previous AI-generated plans unless the project owner explicitly says otherwise.
 
@@ -213,7 +214,7 @@ After each major task, report:
 
 ## Current Phase
 
-**Phases 1–6 are complete.**
+**Phases 1–6 are complete, and Phase 7A (Round 2) is complete.**
 
 - Phase 1 — Project Foundation
 - Phase 2 — Protocol + Generic Game State
@@ -221,8 +222,9 @@ After each major task, report:
 - Phase 4 — Rooms, Players, Teams & Reconnect (`docs/LOBBY.md`)
 - Phase 5 — Generic Authoritative Engine (`docs/GAME_ENGINE.md`)
 - Phase 6 — Shared Systems (`docs/SHARED_SYSTEMS.md`)
+- Phase 7A — Round 2, "Shake Up Yuhself!" (`docs/ROUND_2.md`)
 
-Next is **Phase 7 — Rounds** from `docs/DEVELOPMENT_ROADMAP.md`.
+Next is **Phase 7B** from `docs/DEVELOPMENT_ROADMAP.md`.
 **Do not begin it without the project owner asking.**
 
 Do not jump ahead to full gameplay.
@@ -240,6 +242,28 @@ supplies those from locked rules — not from the engine's shape.
 
 The mid-game **Host disconnect** rule is still open: connection loss is recorded
 and play is left exactly as it was.
+
+### Phase 7A leaves these deliberately undecided
+
+Round 2 is implemented, and the physical games stay **outside the software**
+(D-003) — no rule, duration, score, sensor or automatic winner exists anywhere
+for Bottle Battle, Match Makers, Grabbers or Bombers. The Host watches the game
+and picks the winner; the server pays the configured 500 BB (or 1,000 with a
+legally played Double It).
+
+Still undecided, and not to be invented:
+
+- **A Round 2 tie.** No locked rule says what a drawn physical game does, so a
+  result requires exactly one winner and a confirmation without one is refused.
+  It is never silently resolved.
+- **Clue, Extra Time and Second Chance during a physical challenge.** What they
+  would mean is undefined, so they are left disabled for Round 2 rather than
+  guessed. They are still sellable, and still work where they do apply.
+- **Round 1.** It is not implemented, and no production rule lets a game skip it.
+  Round 2 is reached by a development-gated entry only.
+- **Round 3.** Round 2 stops at `ROUND_COMPLETE`.
+- **A physical-challenge pause rule.** Round 2 marks nobody an active player, so
+  a phone that sleeps mid-challenge does not stop the game (D-021).
 
 ### Phase 6 leaves these deliberately undecided
 

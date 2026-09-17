@@ -10,6 +10,9 @@ import {
   ok,
   PLUS_15_SECONDS_MS,
   rejection,
+  ROUND2_CHALLENGES,
+  ROUND2_EVENTS,
+  ROUND2_ROUND_INDEX,
   type CardChallengeKind,
   type HostDealTemplate,
   type MarketItem,
@@ -30,12 +33,14 @@ import {
   type Rejection,
   type Result,
   type RoomId,
+  type Round2StateView,
   type SequenceNumber,
   type TeamId,
   type TimerView,
   type TurnOwnership,
   NO_TURN,
 } from '@bb/protocol';
+import { Round2 } from './round2.js';
 import { BbLedger } from './bb-ledger.js';
 import type { Clock } from './clock.js';
 import type { EventLog } from './event-log.js';
@@ -150,6 +155,15 @@ export class GameEngine {
   #challenge: InternalChallenge | null = null;
   #turn: TurnOwnership = NO_TURN;
   /**
+   * Round 2 progression, once the round is entered. Phase 7A.
+   *
+   * Null for every other round, which is what keeps the engine generic: a
+   * round's state exists only while that round is being played, and the engine
+   * knows nothing about Round 2 beyond holding this and routing three intents
+   * to it.
+   */
+  #round2: Round2 | null = null;
+  /**
    * Players whose participation the CURRENT challenge requires.
    *
    * THE OPERATIONAL DEFINITION OF "ACTIVE PLAYER" (Phase 5 spec §9). D-011
@@ -252,6 +266,11 @@ export class GameEngine {
       pause: this.#pauseView(),
       challenge: this.challengeView(),
       turn: this.#turn,
+      // Phase 7A. Null outside Round 2, and identical for Host and players —
+      // which game is running and who won are exactly what a party game puts on
+      // a TV. Nothing secret travels here; §21's secrets stay in the Phase 6
+      // views.
+      round2: this.round2View(),
     };
   }
 
@@ -1563,6 +1582,367 @@ export class GameEngine {
     return null;
   }
 
+  // -------------------------------------------------------------------------
+  // Round 2 — "Shake Up Yuhself!". Phase 7A.
+  //
+  // THE FIRST REAL ROUND, and it is deliberately thin. GAME_RULES_LOCKED.md §12
+  // and D-003 put the physical games outside the app entirely, so the engine's
+  // whole job is: walk the four locked challenges in order, take the Host's
+  // winner, and pay the configured BB through the ledger.
+  //
+  // Everything else is BORROWED, not rebuilt. The challenge container, the
+  // phases, the pause guard and the ledger are Phase 5's; card eligibility, the
+  // Clash and the multiplier are Phase 6's. Phase 7A spec §2 forbids a second
+  // round-state system and §6 and §7 forbid Round 2 copies of the card and
+  // multiplier rules, so `Round2` holds progress and nothing else.
+  // -------------------------------------------------------------------------
+
+  /** Round 2 progression, or null until the round is entered. */
+  get round2(): Round2 | null {
+    return this.#round2;
+  }
+
+  round2View(): Round2StateView | null {
+    return this.#round2 === null ? null : this.#round2.view();
+  }
+
+  /**
+   * Enter Round 2.
+   *
+   * ALL TEAMS TAKE PART — Phase 7A §16 and §17. The engine hands `Round2` the
+   * teams exactly as the game has them; nothing is seeded, ranked or eliminated,
+   * because no locked rule for Round 2 says any of those things happen.
+   *
+   * Requires the engine to actually be on Round 2. `roundIndex` is the generic
+   * counter Phase 5 already keeps, so entering Round 2 means the game arrived
+   * here through the real phases rather than jumping.
+   */
+  beginRound2(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    if (this.#roundIndex !== ROUND2_ROUND_INDEX) {
+      return err(
+        rejection('WRONG_STATE', 'The game is not on Round 2.', {
+          roundIndex: this.#roundIndex,
+          expected: ROUND2_ROUND_INDEX,
+        }),
+      );
+    }
+    if (this.#round2 !== null) {
+      return err(rejection('WRONG_STATE', 'Round 2 has already started.'));
+    }
+
+    const round = new Round2({ clock: this.#clock });
+    const began = round.begin([...this.#teams.keys()].map((id) => asTeamId(id)));
+    if (!began.ok) return err(began.error);
+
+    this.#round2 = round;
+
+    return ok({
+      type: ROUND2_EVENTS.ROUND2_STARTED,
+      payload: {
+        roundIndex: ROUND2_ROUND_INDEX,
+        // The four challenges and their order travel to clients, so neither
+        // Unity nor a phone holds its own list. Phase 7A spec §3.
+        challenges: ROUND2_CHALLENGES,
+        round2: round.view(),
+      },
+    });
+  }
+
+  /**
+   * Prepare the next Round 2 physical challenge, in the locked order.
+   *
+   * Composes the round's cursor with the GENERIC `prepareChallenge` rather than
+   * making its own container: the challenge that results is an ordinary engine
+   * challenge whose `challengeType` happens to be `BOTTLE_BATTLE`. Everything
+   * Phase 5 already guarantees — one challenge at a time, a clean slate, no
+   * inherited turn or active player — therefore applies unchanged.
+   *
+   * THE HOST CANNOT CHOOSE WHICH. There is no parameter: `Round2` hands out the
+   * first unresolved challenge, so the order cannot be skipped or repeated.
+   */
+  prepareRound2Challenge(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round2;
+    if (round === null) {
+      return err(rejection('WRONG_STATE', 'Round 2 has not started.'));
+    }
+
+    // Asked BEFORE the generic prepare, so a round that is complete (or already
+    // running a challenge) is refused without creating an engine challenge that
+    // would then have to be unwound.
+    const next = round.nextToPrepare();
+    if (!next.ok) return err(next.error);
+
+    const prepared = this.prepareChallenge({ challengeType: next.value.challengeType });
+    if (!prepared.ok) return err(prepared.error);
+
+    const challenge = this.#challenge;
+    /* c8 ignore next 3 -- unreachable: prepareChallenge has just succeeded, so
+       it has assigned #challenge. */
+    if (challenge === null) {
+      return err(rejection('WRONG_STATE', 'The challenge was not created.'));
+    }
+
+    const marked = round.markPrepared(challenge.challengeId);
+    if (!marked.ok) return err(marked.error);
+
+    return ok({
+      type: ROUND2_EVENTS.ROUND2_CHALLENGE_PREPARED,
+      payload: {
+        challengeId: challenge.challengeId,
+        challengeType: marked.value.challengeType,
+        displayName: marked.value.displayName,
+        order: marked.value.order,
+        baseRewardBb: marked.value.baseRewardBb,
+        cardChallengeKind: marked.value.cardChallengeKind,
+        challenge: this.challengeView(),
+        round2: round.view(),
+      },
+    });
+  }
+
+  /**
+   * The Host selects a winning team — step one of two. MOVES NO BB.
+   *
+   * Phase 7A §19 asks for a confirmation step clear enough to stop an accidental
+   * award, and §14 makes a confirmed result final. Splitting selection from
+   * payment is what gives the Host somewhere safe to be wrong: the selection is
+   * shown on the TV, and only the second intent pays.
+   */
+  selectRound2Winner(teamId: TeamId): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round2;
+    if (round === null) {
+      return err(rejection('WRONG_STATE', 'Round 2 has not started.'));
+    }
+    // The team must exist in THIS GAME before the round is asked whether it is
+    // participating — §13, "do not trust a raw team ID without validation".
+    if (!this.#teams.has(teamId)) {
+      return err(rejection('NOT_FOUND', 'Unknown team.', { teamId }));
+    }
+
+    const selected = round.selectWinner(teamId);
+    if (!selected.ok) return err(selected.error);
+
+    return ok({
+      type: ROUND2_EVENTS.ROUND2_WINNER_SELECTED,
+      payload: {
+        // NO AMOUNT. This event pays nothing, and carries nothing that looks
+        // like it might.
+        teamId,
+        challengeType: selected.value.challengeType,
+        challengeId: selected.value.challengeId,
+        round2: round.view(),
+      },
+    });
+  }
+
+  /**
+   * The Host confirms the result — step two. THIS PAYS.
+   *
+   * Where the three authorities meet, and the order matters:
+   *
+   *   1. the HOST decided who won (subjective — CLAUDE.md, D-003),
+   *   2. ROUND 2 supplies the base reward from configuration (§12: 500 BB),
+   *   3. the SHARED SYSTEMS decide whether it doubles (§3, §6 — Double It only,
+   *      played legally, before the result),
+   *   4. the LEDGER moves the BB and applies the floor.
+   *
+   * No client supplies a number at any point. A Host client naming an amount
+   * would be precisely the "client decides how much BB to add" CLAUDE.md
+   * forbids, so no handler reads one.
+   */
+  confirmRound2Result(input: {
+    readonly winningTeamId?: TeamId | null;
+  } = {}): Result<{ readonly change: EngineChange; readonly ledgerEntries: readonly BbLedgerEntry[] }> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round2;
+    if (round === null) {
+      return err(rejection('WRONG_STATE', 'Round 2 has not started.'));
+    }
+
+    if (input.winningTeamId !== undefined && input.winningTeamId !== null) {
+      if (!this.#teams.has(input.winningTeamId)) {
+        return err(rejection('NOT_FOUND', 'Unknown team.', { teamId: input.winningTeamId }));
+      }
+    }
+
+    // Full validation before anything moves — a refused confirmation must not
+    // leave a paid team and an unresolved round.
+    const pending = round.prepareConfirmation({ winningTeamId: input.winningTeamId ?? null });
+    if (!pending.ok) return err(pending.error);
+
+    const { definition, winningTeamId, baseRewardBb } = pending.value;
+
+    // §7 / §8 — the multiplier is READ FROM THE SHARED SYSTEM, never computed
+    // here. `applyMultiplier` returns base×2 only when that team has a DOUBLE
+    // in force, which a Double It played into this challenge's card window put
+    // there. Asking now, at confirmation, is what makes the locked timing rule
+    // ("activate before result") true: a card played after this point has
+    // nothing left to double.
+    const doubled = this.#shared.isDoubledFor(winningTeamId);
+    const award = this.#shared.applyMultiplier(winningTeamId, baseRewardBb);
+
+    // The generic resolution does the rest: it moves BB through the ledger with
+    // reason `challenge_result`, records the winner, clears the per-challenge
+    // state and advances to RESULT. Phase 7A spec §15 and §2 — Round 2 does not
+    // get its own award path or its own phase handling.
+    const resolved = this.resolveChallenge({
+      winningTeamIds: [winningTeamId],
+      bbDeltas: { [winningTeamId]: award },
+      decidedByHost: true,
+      completion: 'completed',
+      note: `${definition.displayName}${doubled ? ' (Double It)' : ''}`,
+    });
+    if (!resolved.ok) return err(resolved.error);
+
+    // What the LEDGER applied, not what was intended. The two can differ at the
+    // floor, and the round's record must not disagree with the ledger.
+    const applied = resolved.value.change.payload['result'] as GameChallengeResult;
+    const awarded = applied.bbApplied[winningTeamId] ?? 0;
+
+    const view = round.recordResult({ winningTeamId, awardedBb: awarded, doubled });
+    const complete = round.complete;
+
+    return ok({
+      change: {
+        type: ROUND2_EVENTS.ROUND2_CHALLENGE_RESOLVED,
+        payload: {
+          challengeId: pending.value.challengeId,
+          challengeType: definition.challengeType,
+          displayName: definition.displayName,
+          winningTeamId,
+          baseRewardBb,
+          /** What actually moved, after the multiplier and the floor. */
+          awardedBb: awarded,
+          doubled,
+          challengeResult: applied,
+          teams: this.teams(),
+          round2: round.view(),
+          // §18 — the round is complete after the fourth. The engine says so
+          // and STOPS; moving on to Round 3 is not Phase 7A's.
+          roundComplete: complete,
+          resolvedChallenge: view,
+        },
+      },
+      ledgerEntries: resolved.value.ledgerEntries,
+    });
+  }
+
+  /**
+   * DEVELOPMENT ONLY — walk the engine from game start to the Round 2 intro.
+   *
+   * Round 1 does not exist (Phase 7A §4), so nothing can legitimately finish it
+   * and hand over. Rather than invent a production rule that skips it — which
+   * the spec forbids outright — this drives the REAL phase transitions and then
+   * calls the SAME `beginRound2` that Round 1's completion will eventually call.
+   *
+   * What it does NOT do: invent a transition, assign a phase directly, seed BB,
+   * or change what any round contains. Every step below is a legal transition
+   * from `transitions.ts`, and the round counter advances the ordinary way. If
+   * the state machine would refuse a step in a real game, it refuses here.
+   *
+   * Gated by the room on `devTools`, like `DEV_ADJUST_BB` (D-024). The engine
+   * checks it too, so no future caller can reach it around that gate.
+   */
+  devEnterRound2(): Result<readonly EngineChange[]> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    if (!this.#options.devTools) {
+      return err(
+        rejection('ILLEGAL_ACTION', 'Development controls are disabled on this server.'),
+      );
+    }
+    if (this.#round2 !== null) {
+      return err(rejection('WRONG_STATE', 'Round 2 has already started.'));
+    }
+
+    if (this.#roundIndex > ROUND2_ROUND_INDEX) {
+      return err(
+        rejection('WRONG_STATE', 'The game is already past Round 2.', {
+          roundIndex: this.#roundIndex,
+        }),
+      );
+    }
+
+    const changes: EngineChange[] = [];
+
+    // THE ROUTE IS THE STATE MACHINE'S, NOT THIS METHOD'S.
+    //
+    // `START_GAME` leaves the engine in ROUND_INTRO on round 1, and the only
+    // legal way out of a round is through a challenge and its result:
+    //
+    //   ROUND_INTRO -> CHALLENGE_INTRO -> ACTIVE_PLAY -> RESULT
+    //               -> ROUND_COMPLETE -> ROUND_INTRO (round 2)
+    //
+    // There is no shortcut, deliberately — ROUND_INTRO -> ROUND_INTRO and
+    // ROUND_INTRO -> ROUND_COMPLETE are both absent from the transition table
+    // (lifecycle.ts), because a round ends by being played.
+    //
+    // So this walks that route with an EMPTY PLACEHOLDER challenge that awards
+    // nothing. It is not Round 1 and does not pretend to be: Round 1's rules,
+    // questions and allocation are open (OPEN_RULES.md §1) and nothing here
+    // decides any of them. It exists only to satisfy the state machine honestly
+    // rather than by assigning a phase behind its back.
+    //
+    // Re-entering ROUND_INTRO is what advances the round counter and expires
+    // Market items from the round that just ended (§10), so Round 2 starts with
+    // the state a real Round 1 completion would have left.
+    while (this.#roundIndex < ROUND2_ROUND_INDEX) {
+      if (this.#phase.phase === 'ROUND_INTRO') {
+        const intro = this.advancePhase('CHALLENGE_INTRO');
+        if (!intro.ok) return err(intro.error);
+        changes.push(intro.value);
+
+        const prepared = this.prepareChallenge({
+          challengeType: DEV_ROUND_SKIP_CHALLENGE_TYPE,
+        });
+        if (!prepared.ok) return err(prepared.error);
+        changes.push(prepared.value);
+
+        const started = this.startChallenge();
+        if (!started.ok) return err(started.error);
+        changes.push(started.value);
+
+        // Resolved with NO winner and NO BB. `abandoned` is the honest
+        // completion status: this challenge was never played.
+        const resolved = this.resolveChallenge({
+          completion: 'abandoned',
+          decidedByHost: true,
+          note: 'Development: skipped to Round 2. Round 1 is not implemented.',
+        });
+        if (!resolved.ok) return err(resolved.error);
+        changes.push(resolved.value.change);
+      }
+
+      if (this.#phase.phase !== 'ROUND_COMPLETE') {
+        const complete = this.advancePhase('ROUND_COMPLETE');
+        if (!complete.ok) return err(complete.error);
+        changes.push(complete.value);
+      }
+
+      const next = this.advancePhase('ROUND_INTRO');
+      if (!next.ok) return err(next.error);
+      changes.push(next.value);
+    }
+
+    const began = this.beginRound2();
+    if (!began.ok) return err(began.error);
+    changes.push(began.value);
+
+    return ok(changes);
+  }
+
   /** Exposed for the owning room to append engine events to the shared log. */
   get log(): EventLog {
     return this.#log;
@@ -1576,6 +1956,17 @@ export class GameEngine {
 // intents come from phones, so a `challengeKind` field is a string until one of
 // these says otherwise — the same discipline room.ts applies to phase names.
 // ---------------------------------------------------------------------------
+
+/**
+ * The placeholder challenge type the development Round 2 entry uses to leave
+ * round 1 legally.
+ *
+ * NOT ROUND 1. It awards nothing, has no configuration, no questions and no
+ * card window, and its name says what it is so it can never be mistaken for a
+ * real round in a log or a ledger note. Round 1's actual rules stay open
+ * (OPEN_RULES.md §1).
+ */
+const DEV_ROUND_SKIP_CHALLENGE_TYPE = 'DEV_ROUND_SKIP';
 
 function isCardChallengeKind(value: string): value is CardChallengeKind {
   return (CARD_CHALLENGE_KINDS as readonly string[]).includes(value);

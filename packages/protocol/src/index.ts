@@ -23,10 +23,14 @@
  * (maco-mail.ts), Host Deals and the generic wager (deals.ts), and the intents,
  * events and secrecy-aware views that tie them together (shared-systems.ts).
  *
- * Still NOT here: any round. No question allocation, no Family Feud board, no
- * buzzer, no Sudden Death. Several of those depend on rules open in
- * docs/OPEN_RULES.md — including Maco!'s challenge compatibility (§7), which is
- * why cards.ts models the card but never gives it a legal challenge.
+ * Phase 7A adds the FIRST REAL ROUND (round2.ts): the four locked physical
+ * challenges, their order, the 500 BB base reward and the Host winner flow.
+ * It adds no physical rule — D-003 keeps those outside the app entirely.
+ *
+ * Still NOT here: Round 1, Round 3, Round 4. No question allocation, no Family
+ * Feud board, no buzzer, no Sudden Death. Several of those depend on rules open
+ * in docs/OPEN_RULES.md — including Maco!'s challenge compatibility (§7), which
+ * is why cards.ts models the card but never gives it a legal challenge.
  */
 
 export * from './version.js';
@@ -43,6 +47,7 @@ export * from './market.js';
 export * from './maco-mail.js';
 export * from './deals.js';
 export * from './shared-systems.js';
+export * from './round2.js';
 export * from './snapshot.js';
 export * from './transport.js';
 export * from './benchmark.js';

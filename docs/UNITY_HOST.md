@@ -68,6 +68,47 @@ Unity.exe -batchmode -quit -nographics -projectPath unity/host \
   -executeMethod BrainsAndBacchanal.EditorTools.HeadlessLobbyCheck.Run
 ```
 
+`HeadlessRound2Check.cs` covers **Round 2** (Phase 7A): the locked challenge
+order, the current challenge and its display name, the Host-selectable teams, the
+two-step winner flow, the 500 BB award, the Double It result at 1,000, round
+completion, refusal of a fifth challenge, and Host reconnect without reselecting
+a winner.
+
+```
+Unity.exe -batchmode -quit -nographics -projectPath unity/host   -executeMethod BrainsAndBacchanal.EditorTools.HeadlessRound2Check.Run
+```
+
+The server must be running with `GAME_SERVER_DEV_TOOLS=1`: Round 1 is not
+implemented, so `DEV_START_ROUND2` is the only way into Round 2, and the check
+fails with an explanatory message rather than a confusing assertion if it is off.
+
+#### The Host panel is still a test instrument
+
+`HostRound2Panel.cs` exposes the engine's phases directly — `1. Go to CHALLENGE
+INTRO`, `2. PREPARE`, `3. BEGIN CHALLENGE`, `4. OPEN CARD WINDOW` — because
+Phase 7A's job was proving the round works, not designing the show.
+
+Only three of its controls are genuinely a Host decision: starting the
+challenge, choosing the winner, and confirming. The rest is plumbing a Host
+should never see, and Phase 8 collapses it.
+
+#### It found a real bug on its first run
+
+**JsonUtility cannot represent a null class field.** A JSON `null` deserialises
+to a fully-constructed object with every field at its default — never to `null`.
+So `round2 == null` and `current == null` are *never true in C#*, even though the
+server correctly sends `null` for every round other than Round 2, and for
+`current` once the round is complete.
+
+Left alone, the Host would have drawn the Round 2 panel during every other round
+and shown a stale "current challenge" after the round finished. Nothing would
+have raised an error anywhere.
+
+The fix is an `Exists` predicate on each nullable DTO, keyed on a field the
+server never leaves empty (`challengeType`, `challenges`). **Any future nullable
+object on the wire needs the same treatment** — `x != null` is not a null check
+in a JsonUtility DTO.
+
 ### The QR encoder is hand-written, and verified by decoding
 
 Unity ships no QR encoder, and D-014 deliberately avoids third-party C# packages

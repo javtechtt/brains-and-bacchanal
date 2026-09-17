@@ -257,11 +257,81 @@ namespace BrainsAndBacchanal
                 case SharedEvents.HostDealResolved:
                 case SharedEvents.WagerLocked:
                 case SharedEvents.WagerResolved:
+                // Phase 7A — Round 2. ROUND2_CHALLENGE_RESOLVED carries the new
+                // balances, so without these the awarded BB did not reach the
+                // screen until some LATER event forced a refresh — and on the
+                // fourth challenge there is no later event, so the last award
+                // never appeared at all until Round 3 would have begun.
+                case Round2Events.RoundStarted:
+                case Round2Events.ChallengePrepared:
+                case Round2Events.WinnerSelected:
+                case Round2Events.ChallengeResolved:
+                case Round2Events.RoundCompleted:
                     _lastEvent = envelope.type;
                     _ = RefreshGameSnapshotAsync();
                     break;
+
+                // EVERY OTHER GAMEPLAY EVENT, by prefix.
+                //
+                // This exact gap has now bitten three times: Phase 6's events
+                // were missing from this switch entirely, Phase 7A's Round 2
+                // events were missing again, and the identical bug appeared on
+                // the web player's side both times. The pattern is obvious in
+                // hindsight — an exhaustive list of event names is a list
+                // someone must remember to extend, and nobody does.
+                //
+                // So anything that looks like a gameplay event refreshes the
+                // snapshot even if it is not named above. The cases are kept
+                // for documentation and for the compiler's benefit; this is the
+                // safety net, so a Round 3 event cannot silently fail to reach
+                // the Host's screen the way Round 2's did.
+                //
+                // Refreshing on an unknown event is cheap and always correct:
+                // the Host re-reads the authoritative snapshot rather than
+                // interpreting any payload, so a spurious refresh costs one
+                // round trip and changes nothing.
+                default:
+                    if (IsGameplayEvent(envelope.type))
+                    {
+                        _lastEvent = envelope.type;
+                        _ = RefreshGameSnapshotAsync();
+                    }
+                    break;
             }
         }
+
+        /// <summary>
+        /// Whether an event type is gameplay, and so warrants a snapshot refresh.
+        ///
+        /// Prefix-matched deliberately — see the `default` case above. Room
+        /// events are excluded because they are handled by name earlier in the
+        /// switch and refresh the LOBBY snapshot instead, which is a different
+        /// call.
+        /// </summary>
+        private static bool IsGameplayEvent(string type)
+        {
+            if (string.IsNullOrEmpty(type)) return false;
+
+            foreach (var prefix in GameplayEventPrefixes)
+            {
+                if (type.StartsWith(prefix, StringComparison.Ordinal)) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Prefixes covering every gameplay event family.
+        ///
+        /// 'ROUND' covers ROUND2_*, a future ROUND3_* and ROUND_COMPLETE alike,
+        /// so the next round does not have to remember this list either.
+        /// </summary>
+        private static readonly string[] GameplayEventPrefixes =
+        {
+            "GAME_", "BB_", "CHALLENGE_", "TURN_", "TIMER_", "ACTIVE_PLAYERS_",
+            "HOST_RULING", "PHASE_", "REVIEW_", "BACCHANAL_", "CARD_", "CLASH_",
+            "PART_DAT_FIGHT", "MARKET_", "MACO_MAIL_", "ADVANTAGE_",
+            "HELD_EFFECT_", "HOST_DEAL_", "WAGER_", "ROUND",
+        };
 
         // -------------------------------------------------------------------
         // Server actions
@@ -630,6 +700,11 @@ namespace BrainsAndBacchanal
                 // deleting it when Phase 8 builds the real presentation touches
                 // nothing else.
                 DrawSharedPanel(snapshot, game);
+                GUILayout.Space(24);
+                // Phase 7A — the first REAL round presentation, as opposed to
+                // the two test instruments beside it. Still functional rather
+                // than finished; Phase 8 does the theatre.
+                DrawRound2Panel(snapshot, game);
                 GUILayout.EndHorizontal();
             }
 

@@ -252,6 +252,35 @@ Market purchases are game-long and survive.
 after the round that follows their purchase; Maco Mail advantages are skipped,
 per §7. See `docs/SHARED_SYSTEMS.md`.
 
+### Phase 7A adds a round WITHOUT adding a phase
+
+Round 2 is the first real round, and it introduces **no new phase and no new
+transition**. It runs entirely on the table above:
+
+```text
+ROUND_INTRO ──▶ MARKET ──▶ CHALLENGE_INTRO ──▶ ACTIVE_PLAY ──▶ RESULT
+                              ▲                                   │
+                              └───────────────────────────────────┤
+                                  (next physical challenge)       │
+                                                                  ▼
+                                                          ROUND_COMPLETE
+```
+
+That is the point. `Round2` is a **cursor over four challenges**, not a second
+state machine: it tracks which game is current, which have resolved and who the
+Host has selected, while the phase, the challenge container and the pause model
+stay exactly where Phase 5 put them. Phase 7A spec §2 forbids a second
+round-state system, and there is none.
+
+The one thing Round 2 adds to this document's vocabulary is a **per-challenge
+progress** value (`not_started` / `in_progress` / `resolved`) which is
+deliberately distinct from the engine's `ChallengeStatus`. `ChallengeStatus`
+describes one container's lifecycle; Round 2's progress describes the ROUND's
+position through its four games — the thing a display needs to say "3 of 4".
+
+**`ROUND_COMPLETE` is where Phase 7A stops.** `ROUND_COMPLETE → ROUND_INTRO` is
+already legal and Round 3 will use it, but nothing in Phase 7A takes it.
+
 ## What intentionally remains undefined
 
 Phase 2 does **not** decide, and must not be read as deciding:

@@ -440,6 +440,33 @@ resolution, and a reconnect retry.
 
 ---
 
+## Phase 7A: the first round runs on this engine unchanged
+
+Round 2 ("Shake Up Yuhself!") is implemented, and it is worth recording what it
+did **not** need:
+
+- no new phase and no new transition,
+- no second challenge container — a Round 2 game IS a generic challenge whose
+  `challengeType` happens to be `BOTTLE_BATTLE`,
+- no second BB path — the award goes through `resolveChallenge` and the ledger,
+- no round-specific stacking or multiplier logic — it asks the Phase 6 shared
+  systems,
+- no change to pause, reconnect, idempotency or the snapshot split.
+
+What it added: a `Round2` cursor held by the engine (null outside Round 2), three
+Host intents, and one field on the session view.
+
+The generic design paid off exactly as intended — and the one place Round 2
+deliberately does **not** reuse the engine is `HOST_RESOLVE_CHALLENGE`, whose
+client-supplied `bbDeltas` exist for generic testing. A real round must not let a
+client name an amount, so Round 2 computes 500 (or 1,000) server-side and calls
+`resolveChallenge` internally.
+
+**Round 2 marks no active players**, which follows from D-021 rather than
+contradicting it: the physical game happens in the room, so no player's
+*software* participation is required, and a sleeping phone must not stop the
+party. See `docs/ROUND_2.md`.
+
 ## What Phase 5 deliberately did NOT decide
 
 Nothing in `OPEN_RULES.md` is resolved. Specifically:

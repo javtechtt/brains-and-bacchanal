@@ -58,6 +58,18 @@ const GAME_EVENT_PREFIXES = [
   'HELD_EFFECT_',
   'HOST_DEAL_',
   'WAGER_',
+  // PHASE 7A. Round 2's events (ROUND2_CHALLENGE_RESOLVED above all) carry the
+  // new balances, and without this prefix they matched nothing here — so a
+  // phone showed the old BB until some LATER event happened to refresh it. On
+  // the fourth and final challenge there is no later event, so the award never
+  // appeared at all until the next round began.
+  //
+  // Third time this exact gap has bitten: Phase 5 shipped the comment above,
+  // Phase 6 forgot to extend the list, and Phase 7A forgot again. Hence
+  // 'ROUND' rather than the five event names, so ROUND2_*, a future ROUND3_*
+  // and a plain ROUND_COMPLETE all match without anyone having to remember
+  // this list again.
+  'ROUND',
 ];
 
 /**

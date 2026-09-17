@@ -9,6 +9,7 @@ import type {
 import type { GamePhase } from './lifecycle.js';
 import type { ChallengeStatus, PauseReason } from './models.js';
 import type { LobbyPlayer, LobbyRoom, TeamMode } from './room.js';
+import type { Round2StateView } from './round2.js';
 import type { HostSharedSystemsView, PlayerSharedSystemsView } from './shared-systems.js';
 
 /**
@@ -402,6 +403,19 @@ export interface GameSessionView {
   readonly pause: GamePauseView | null;
   readonly challenge: GameChallengeView | null;
   readonly turn: TurnOwnership;
+  /**
+   * Round 2 progression, when Round 2 is being played. Phase 7A.
+   *
+   * On the SHARED session view rather than split across the two snapshots,
+   * because every field of it is public: which physical challenge is running,
+   * who the Host has selected, who won the earlier ones and what they were paid.
+   * A party game shows all of that on a TV, and a phone is useful when the TV is
+   * behind you — the same reasoning that puts team balances on both sides.
+   *
+   * Null in every other round. A later round adds its own field rather than
+   * reusing this one, so no round can inherit another's state by accident.
+   */
+  readonly round2: Round2StateView | null;
 }
 
 /** Why the game is paused and where it returns to. */

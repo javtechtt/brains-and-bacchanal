@@ -137,13 +137,50 @@ result: Maco! exists and is dealt but has no legal challenge (§7); Steups is a
 generic effect with no Family Feud board behaviour (§8); Partner, I Sorry
 resolves at ≥500 BB and is blocked below it (§12).
 
-## Phase 7 — Rounds ◀ NEXT
+## Phase 7 — Rounds ◀ IN PROGRESS
 
 ### Round 1
 Wait for final question allocation before hard-coding sequence.
 
-### Round 2
-Host winner → server awards 500 BB.
+**Not started.** `OPEN_RULES.md` §1 is still open. Because of that, Round 2 has a
+development-gated entry (`DEV_START_ROUND2`) rather than a production path —
+inventing a rule that lets a real game skip Round 1 was explicitly refused.
+
+### Round 2 ✅ COMPLETE (Phase 7A)
+
+Built:
+- the four locked physical challenges in their documented order,
+- 500 BB per challenge, from one configured constant,
+- the two-step Host winner flow (select, then confirm) — the server computes
+  every number,
+- Double It only, through the existing Phase 6 eligibility table,
+- the ×2 multiplier through the existing shared budget — 1,000 BB is written
+  nowhere,
+- the Phase 6 Market at its locked Round 2 prices,
+- Round 2 state on both snapshots, the Unity Host view and the player screen,
+- a development-only entry, because Round 1 does not exist.
+
+All implemented and **verified on real hardware**: Unity Host, two real phones
+on the LAN, the compiled server, all four challenges, Double It, round
+completion and a mid-round reconnect. See `docs/ROUND_2.md`.
+
+The physical test earned its place — it found a bug every automated test had
+missed, where an awarded balance did not reach either client's screen until the
+next challenge began.
+
+Not included, deliberately: any physical rule, duration, score or automatic
+winner (D-003); any tie behaviour (no locked rule — a result requires one
+winner); Clue, Extra Time and Second Chance effects during a physical challenge
+(undefined, so left disabled rather than guessed); durable storage; and any rule
+for a mid-game Host disconnect.
+
+Deferred to Phase 8, not forgotten: the Host still drives the round through the
+raw engine phases (`CHALLENGE_INTRO`, prepare, begin, open card window) rather
+than one "start the challenge" control. That is a test instrument, not the
+intended Host experience.
+
+**Nothing in `OPEN_RULES.md` was resolved.** Maco! is still unplayable (§7), and
+Round 1's allocation (§1) is what forced the development entry.
 
 ### Round 3
 Implement locked parts:

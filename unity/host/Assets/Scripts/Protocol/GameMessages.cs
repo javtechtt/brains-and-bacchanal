@@ -190,6 +190,17 @@ namespace BrainsAndBacchanal.Protocol
         public GamePauseView pause;
         public GameChallengeView challenge;
         public TurnOwnership turn;
+
+        /// <summary>
+        /// Round 2 progression. Phase 7A. Null in every other round.
+        ///
+        /// On the shared session view because every field of it is public —
+        /// the same reasoning that puts team balances on both snapshots.
+        /// </summary>
+        public Round2StateView round2;
+
+        /// <summary>Whether Round 2 is the round being played right now.</summary>
+        public bool InRound2 => round2 != null && round2.Exists;
     }
 
     /// <summary>One entry in the BB history. Host-only.</summary>

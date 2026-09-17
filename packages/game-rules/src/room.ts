@@ -14,6 +14,7 @@ import {
   rejection,
   ROOM_EVENTS,
   ROOM_INTENTS,
+  ROUND2_INTENTS,
   SHARED_INTENTS,
   teamsForMode,
   toPublicPlayer,
@@ -603,6 +604,22 @@ export class Room {
         return this.#respondToHostDeal(connectionId, intent);
       case SHARED_INTENTS.PROPOSE_WAGER:
         return this.#proposeWager(connectionId, intent);
+
+      // --- Phase 7A: Round 2 --------------------------------------------------
+      // ALL HOST-GATED. GAME_RULES_LOCKED.md §12 and D-003 make the Host the
+      // judge of a physical game, so there is deliberately no player intent
+      // here: a phone has no route to nominate a winner, because no handler
+      // below accepts one from a player connection (Phase 7A spec §13).
+      case ROUND2_INTENTS.HOST_PREPARE_ROUND2_CHALLENGE:
+        return this.#engineAction(connectionId, intent, () =>
+          this.#game.prepareRound2Challenge(),
+        );
+      case ROUND2_INTENTS.HOST_SELECT_PHYSICAL_WINNER:
+        return this.#selectRound2Winner(connectionId, intent);
+      case ROUND2_INTENTS.HOST_CONFIRM_PHYSICAL_RESULT:
+        return this.#confirmRound2Result(connectionId, intent);
+      case ROUND2_INTENTS.DEV_START_ROUND2:
+        return this.#devStartRound2(connectionId, intent);
 
       default:
         return this.#reject(rejection('INVALID_REQUEST', 'Unknown intent type.', { type: intent.type }));
@@ -1780,6 +1797,130 @@ export class Room {
     });
     if (!outcome.ok) return this.#reject(outcome.error);
     return this.#publish(outcome.value, intent);
+  }
+
+  // -------------------------------------------------------------------------
+  // Phase 7A — Round 2
+  //
+  // Three Host intents and one development entry. Everything else Round 2 needs
+  // — starting the challenge, opening the card window, the Market, playing a
+  // card, pausing, the snapshot read — is a Phase 5 or Phase 6 intent that
+  // already exists and is not restated (Phase 7A spec §26).
+  // -------------------------------------------------------------------------
+
+  /**
+   * Host selects a winning team. Step one of two; moves no BB.
+   *
+   * The teamId IS read from the payload here, and that is correct: the Host is
+   * nominating someone else, not acting as themselves. The protection is the
+   * #requireHost gate plus full server-side validation of the team — it must
+   * exist and be taking part (Phase 7A spec §13). This is the opposite case to
+   * a player intent, where reading a teamId from the payload would let a phone
+   * act as another team.
+   */
+  #selectRound2Winner(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const teamId = readString(intent.payload, 'teamId');
+    if (teamId === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing teamId.'));
+    }
+
+    const outcome = this.#game.selectRound2Winner(asTeamId(teamId));
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * Host confirms the result. Step two; THIS PAYS.
+   *
+   * NO AMOUNT IS READ FROM THE PAYLOAD, and that is the whole point. The server
+   * takes the base reward from Round 2's configuration and the multiplier from
+   * the shared systems, so a Host client sending `awardedBb: 99999` changes
+   * nothing — there is no handler that would look at it. Same discipline as the
+   * Host Deal, where GAME_RULES_LOCKED.md §9 forbids improvised maths.
+   *
+   * `teamId` is optional: normally the Host confirms what was selected. Naming
+   * one confirms that team instead, and it goes through the same validation.
+   */
+  #confirmRound2Result(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const teamId = readString(intent.payload, 'teamId');
+
+    const outcome = this.#game.confirmRound2Result(
+      teamId === null ? {} : { winningTeamId: asTeamId(teamId) },
+    );
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    this.#touch();
+    const event = this.#log.append(
+      outcome.value.change.type,
+      { kind: 'host', sessionId: '' as never },
+      outcome.value.change.payload,
+      intent.intentId,
+    );
+
+    for (const entry of outcome.value.ledgerEntries) {
+      this.#game.attachLedgerSeq(entry.entryId, event.seq);
+    }
+
+    return { ack: ok({ seq: event.seq }), broadcast: [event], direct: [], closeConnections: [] };
+  }
+
+  /**
+   * DEVELOPMENT ONLY — enter Round 2 without playing Round 1.
+   *
+   * WHY THIS EXISTS AT ALL: Round 1 is not implemented (Phase 7A §4), so there
+   * is no legitimate way for a real game to arrive at Round 2. The spec is
+   * explicit that inventing one would be worse — "DO NOT invent a production
+   * rule that allows normal games to skip Round 1" — so this is gated on the
+   * same server flag as DEV_ADJUST_BB (D-024) and cannot run in production.
+   *
+   * IT DOES NOT SHORTCUT THE ENGINE. It walks the REAL phase transitions
+   * (ROUND_INTRO for round 1, then ROUND_INTRO again, which is what increments
+   * the round counter and expires last round's Market items) and then enters
+   * Round 2 through the same `beginRound2` the eventual Round 1 completion will
+   * call. So what it exercises is the real flow, minus Round 1's content.
+   */
+  #devStartRound2(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    if (!this.#game.devTools) {
+      return this.#reject(
+        rejection('ILLEGAL_ACTION', 'Development controls are disabled on this server.'),
+      );
+    }
+
+    const outcome = this.#game.devEnterRound2();
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    this.#touch();
+    // Several phase changes happen on the way to Round 2, and each is a real
+    // state change clients must be able to order. They are appended as separate
+    // events rather than summarised, so a reconnecting client replaying from a
+    // sequence number sees the same history as one that was present.
+    const events = outcome.value.map((change) =>
+      this.#log.append(
+        change.type,
+        { kind: 'host', sessionId: '' as never },
+        change.payload,
+        // Only the first carries the intent id: deduplication keys on it, and
+        // two events claiming the same intent would make a retry ambiguous.
+        change === outcome.value[0] ? intent.intentId : undefined,
+      ),
+    );
+
+    const last = events[events.length - 1];
+    return {
+      ack: ok({ seq: last === undefined ? this.#log.latestSeq() : last.seq }),
+      broadcast: events,
+      direct: [],
+      closeConnections: [],
+    };
   }
 
   /**

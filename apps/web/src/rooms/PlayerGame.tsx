@@ -3,6 +3,7 @@
 import { DEFAULT_TEAM_LABELS, type PlayerGameSnapshot } from '@bb/protocol';
 import { useEffect, useState } from 'react';
 import type { ConnectionStatus } from './client';
+import { PlayerRound2 } from './PlayerRound2';
 import { PlayerSharedSystems } from './PlayerSharedSystems';
 import * as ui from './ui';
 
@@ -92,6 +93,13 @@ export function PlayerGame({
         >
           {paused ? <PausedNotice /> : <PlayStatus snapshot={snapshot} />}
         </div>
+
+        {/* PHASE 7A — Round 2. Rendered only while Round 2 is being played;
+            `round2` is null in every other round, so no other round inherits
+            this screen. */}
+        {game?.round2 !== null && game?.round2 !== undefined && (
+          <PlayerRound2 round2={game.round2} yourTeamId={teamId} />
+        )}
 
         {/* Other teams' balances. Not secret — a party game shows the scores —
             and useful on a phone when the TV is behind you. */}

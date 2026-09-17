@@ -23,9 +23,14 @@ Market, held advantages, Maco Mail, Host Deals and the generic wager. They are
 specified in **`docs/SHARED_SYSTEMS.md`** and listed under
 [Phase 6 messages](#phase-6-messages-shared-systems) below.
 
-Round-specific intents (`BUZZ`, question allocation, a Family Feud board) are
-still **not** defined. They belong to Phase 7, and several depend on rules still
-open in `OPEN_RULES.md`.
+Phase 7A adds the **Round 2** messages: preparing a physical challenge in the
+locked order, the two-step Host winner flow, and the development entry that
+exists only because Round 1 does not. They are specified in **`docs/ROUND_2.md`**
+and listed under [Phase 7A messages](#phase-7a-messages-round-2) below.
+
+Other round-specific intents (`BUZZ`, question allocation, a Family Feud board)
+are still **not** defined. They belong to the rest of Phase 7, and several depend
+on rules still open in `OPEN_RULES.md`.
 
 ## Transport independence
 
@@ -389,6 +394,57 @@ one.
 new field must be placed deliberately on one side. `PlayerSharedSystemsView` has
 **no field capable of carrying an opponent's card**, which is the protection
 rather than a rule someone must remember.
+
+## Phase 7A messages (Round 2)
+
+Specified in `docs/ROUND_2.md`. **Deliberately few** — Round 2 reuses the generic
+engine and the shared systems wholesale, and adds a message only where no
+existing one fits.
+
+### Intents (all Host-only)
+
+| Intent | Payload | Notes |
+|---|---|---|
+| `HOST_PREPARE_ROUND2_CHALLENGE` | *(none)* | **Takes no challenge type.** The server hands out the next challenge in the locked order, so the Host cannot skip a game or repeat one |
+| `HOST_SELECT_PHYSICAL_WINNER` | `teamId` | Step one of two. Records the intended winner and **moves no BB** |
+| `HOST_CONFIRM_PHYSICAL_RESULT` | *(optional `teamId`)* | Step two. **This pays.** Carries no amount |
+| `DEV_START_ROUND2` | *(none)* | **Development only.** Refused unless the server runs with development tools enabled |
+
+Not restated here, because they already exist and Round 2 uses them unchanged:
+`HOST_START_CHALLENGE`, `HOST_OPEN_CARD_WINDOW`, `HOST_OPEN_MARKET`,
+`HOST_CLOSE_MARKET`, `PLAY_BACCHANAL_CARD`, `USE_ADVANTAGE`, the pause intents
+and `REQUEST_GAME_SNAPSHOT`.
+
+### Events
+
+`ROUND2_STARTED`, `ROUND2_CHALLENGE_PREPARED`, `ROUND2_WINNER_SELECTED`,
+`ROUND2_CHALLENGE_RESOLVED`, `ROUND2_COMPLETED`.
+
+`ROUND2_WINNER_SELECTED` carries **no amount**, because it pays nothing.
+`ROUND2_CHALLENGE_RESOLVED` carries the base reward, what the ledger actually
+applied, and whether a legally played Double It doubled it — so a Host can
+explain 1,000 BB where a room expected 500.
+
+### No amount travels on a Round 2 intent
+
+`GAME_RULES_LOCKED.md` §12 fixes the reward at 500 BB and §3 fixes the
+multiplier, so the server supplies both. The confirmation intent carries a
+**team**, never a number — the same discipline as the Host Deal, where §9
+forbids improvised mathematics. A payload containing `awardedBb` changes nothing
+because no handler reads one, and a network test asserts exactly that.
+
+This is also why Round 2 does **not** use `HOST_RESOLVE_CHALLENGE`, whose
+`bbDeltas` are client-supplied by design for generic engine testing.
+
+### The session view gains one field
+
+`GameSessionView.round2` — on the **shared** view, not split across the two
+snapshots, because every field of `Round2StateView` is public: which game is
+running, who is selected, who won and what was paid. That is what a party game
+puts on a TV.
+
+It is `null` in every other round. A later round adds its own field rather than
+reusing this one.
 
 ## Event history
 

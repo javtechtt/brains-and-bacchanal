@@ -43,6 +43,15 @@ namespace BrainsAndBacchanal.Protocol
         public const string PlayBacchanalCard = "PLAY_BACCHANAL_CARD";
         public const string RespondToClash = "RESPOND_TO_CLASH";
         public const string PurchaseMarketItem = "PURCHASE_MARKET_ITEM";
+
+        /// <summary>
+        /// A team removes its own unrevealed item from its cart while the
+        /// Market is still open. GAME_RULES_LOCKED.md §10's "purchases are
+        /// final" describes checkout (the Market closing), not every tap
+        /// before it.
+        /// </summary>
+        public const string WithdrawMarketPurchase = "WITHDRAW_MARKET_PURCHASE";
+
         public const string UseAdvantage = "USE_ADVANTAGE";
         public const string RespondToHostDeal = "RESPOND_TO_HOST_DEAL";
         public const string ProposeWager = "PROPOSE_WAGER";
@@ -62,6 +71,7 @@ namespace BrainsAndBacchanal.Protocol
         public const string BacchanalImmunityTriggered = "BACCHANAL_IMMUNITY_TRIGGERED";
         public const string MarketOpened = "MARKET_OPENED";
         public const string MarketPurchaseRecorded = "MARKET_PURCHASE_RECORDED";
+        public const string MarketPurchaseWithdrawn = "MARKET_PURCHASE_WITHDRAWN";
         public const string MarketClosed = "MARKET_CLOSED";
         public const string MarketItemsExpired = "MARKET_ITEMS_EXPIRED";
         public const string MacoMailDrawn = "MACO_MAIL_DRAWN";

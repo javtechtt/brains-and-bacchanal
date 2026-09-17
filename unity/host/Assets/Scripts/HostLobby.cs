@@ -243,6 +243,7 @@ namespace BrainsAndBacchanal
                 case SharedEvents.BacchanalImmunityTriggered:
                 case SharedEvents.MarketOpened:
                 case SharedEvents.MarketPurchaseRecorded:
+                case SharedEvents.MarketPurchaseWithdrawn:
                 case SharedEvents.MarketClosed:
                 case SharedEvents.MarketItemsExpired:
                 case SharedEvents.MacoMailDrawn:

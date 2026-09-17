@@ -16,6 +16,7 @@ import {
   ROOM_INTENTS,
   ROUND2_INTENTS,
   ROUND3_INTENTS,
+  isRound3ChallengeType,
   SHARED_INTENTS,
   teamsForMode,
   toPublicPlayer,
@@ -515,6 +516,34 @@ export class Room {
     const clash = this.#game.pollClashResolution();
     if (clash !== null) {
       events.push(this.#log.append(clash.type, { kind: 'server' }, clash.payload));
+    }
+
+    // Phase 7B: an expired Round 3 item window. §15-§17 — "if nobody answers
+    // correctly, move to the next item", so an expired window is an
+    // instruction rather than just a fact, and the item advances on its own.
+    //
+    // The room does this rather than the engine because only the room holds the
+    // content source; the engine reports the expiry and this supplies the
+    // replacement.
+    if (this.#game.round3ItemWindowExpired()) {
+      const challengeType = this.#game.round3?.currentChallengeType() ?? null;
+      const next =
+        challengeType === null || !isRound3ChallengeType(challengeType)
+          ? null
+          : this.#content.nextItem(challengeType);
+
+      if (next === null) {
+        // Nothing left in the pack. Stop the window rather than re-reporting
+        // the same expiry on every tick; the Host confirms a winner from here.
+        this.#game.clearRound3ExpiredItem();
+      } else {
+        const revealed = this.#game.revealRound3Item(next);
+        if (revealed.ok) {
+          events.push(
+            this.#log.append(revealed.value.type, { kind: 'server' }, revealed.value.payload),
+          );
+        }
+      }
     }
 
     // Phase 7B: the rock-paper-scissors reveal, observed for the same reason.

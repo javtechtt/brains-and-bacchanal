@@ -1250,3 +1250,119 @@ describe('Think Fast has one topic for the whole challenge', () => {
     expect(h.round3().current?.currentItem?.index).toBe(15);
   });
 });
+
+// ---------------------------------------------------------------------------
+// A timed-out item window advances on its own — regression
+//
+// §15, §16 and §17 all lock the same instruction: "if nobody answers
+// correctly, move to the next item." Found in physical testing: a Guess the
+// Logo item that ran out with nobody scoring simply never advanced, because
+// Round3.itemWindowExpired() existed but nothing ever polled it.
+// ---------------------------------------------------------------------------
+
+describe('a timed-out stream item advances on its own', () => {
+  it('reveals the next item once the window expires, with no Host action', () => {
+    const h = makeRoom();
+    enterRound3(h);
+    playChallenge(h, TEAM_A); // Think Fast out of the way
+    beginChallenge(h); // Guess the Logo
+    h.host(ROUND3_INTENTS.HOST_NEXT_ROUND3_ITEM);
+
+    const first = h.round3().current?.currentItem;
+    expect(first?.index).toBe(1);
+
+    h.clock.advance(ROUND3_ITEM_WINDOW_MS + 1);
+    h.room.tick();
+
+    const second = h.round3().current?.currentItem;
+    expect(second?.index).toBe(2);
+    expect(second?.itemId).not.toBe(first?.itemId);
+  });
+
+  it('awards no point for a timeout — a timeout decides nothing (D-022)', () => {
+    const h = makeRoom();
+    enterRound3(h);
+    playChallenge(h, TEAM_A);
+    beginChallenge(h);
+    h.host(ROUND3_INTENTS.HOST_NEXT_ROUND3_ITEM);
+
+    h.clock.advance(ROUND3_ITEM_WINDOW_MS + 1);
+    h.room.tick();
+
+    expect(h.round3().current?.scores['TEAM_A']).toBe(0);
+    expect(h.round3().current?.scores['TEAM_B']).toBe(0);
+  });
+
+  it('does not advance an elimination challenge (Think Fast has no window)', () => {
+    const h = makeRoom();
+    enterRound3(h);
+    beginChallenge(h); // Think Fast — auto-revealed, no window
+
+    const topic = h.round3().current?.currentItem;
+    h.clock.advance(60_000);
+    h.room.tick();
+
+    expect(h.round3().current?.currentItem?.itemId).toBe(topic?.itemId);
+  });
+
+  it('does not advance while a NEXT ITEM confirms before the window expires', () => {
+    const h = makeRoom();
+    enterRound3(h);
+    playChallenge(h, TEAM_A);
+    beginChallenge(h);
+    h.host(ROUND3_INTENTS.HOST_NEXT_ROUND3_ITEM);
+    const first = h.round3().current?.currentItem;
+
+    h.clock.advance(ROUND3_ITEM_WINDOW_MS - 1_000);
+    h.room.tick();
+
+    expect(h.round3().current?.currentItem?.itemId).toBe(first?.itemId);
+  });
+
+  it('stops cleanly once the content source is exhausted', () => {
+    const h = makeRoom();
+    enterRound3(h);
+    playChallenge(h, TEAM_A);
+    beginChallenge(h);
+
+    // Exhaust the Guess the Logo pack (20 TEST items) by expiring windows.
+    for (let i = 0; i < 20; i += 1) {
+      h.host(ROUND3_INTENTS.HOST_NEXT_ROUND3_ITEM);
+      h.clock.advance(ROUND3_ITEM_WINDOW_MS + 1);
+      h.room.tick();
+    }
+
+    // The round is still resolvable by the Host even with no item left.
+    const confirmed = h.host(ROUND3_INTENTS.HOST_CONFIRM_ROUND3_CHALLENGE, {
+      teamId: TEAM_A,
+    });
+    expect(confirmed.ack.ok).toBe(true);
+  });
+
+  it('respects pause: a frozen window does not expire while paused', () => {
+    const h = makeRoom();
+    enterRound3(h);
+    playChallenge(h, TEAM_A);
+    beginChallenge(h);
+    h.host(ROUND3_INTENTS.HOST_NEXT_ROUND3_ITEM);
+    const first = h.round3().current?.currentItem;
+
+    // Paused with time still left on the window — the pause banks elapsed
+    // time going forward, so advancing the clock WHILE paused must not count
+    // against it (D-011).
+    h.host(GAME_INTENTS.HOST_PAUSE_GAME);
+    h.clock.advance(ROUND3_ITEM_WINDOW_MS + 5_000);
+    h.room.tick();
+    expect(h.round3().current?.currentItem?.itemId).toBe(first?.itemId);
+
+    // Resuming picks up with the time the window actually had left, so it
+    // takes the REST of the original window to expire, not zero.
+    h.host(GAME_INTENTS.HOST_RESUME_GAME);
+    h.room.tick();
+    expect(h.round3().current?.currentItem?.itemId).toBe(first?.itemId);
+
+    h.clock.advance(ROUND3_ITEM_WINDOW_MS + 1);
+    h.room.tick();
+    expect(h.round3().current?.currentItem?.itemId).not.toBe(first?.itemId);
+  });
+});

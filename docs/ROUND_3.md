@@ -369,16 +369,18 @@ are built from the same source in one place so they cannot disagree.
 | Check | Result |
 |---|---|
 | `pnpm typecheck` / `lint` / `test` / `build` | **PASS** |
-| Deterministic Round 3 rule tests (FakeClock) | **PASS — 71 new** |
+| Deterministic Round 3 rule tests (FakeClock) | **PASS — 77 new** |
 | Round 3 end-to-end over real WebSockets | **PASS — 14 new** |
-| Total suite | **PASS — 894** |
+| Total suite | **PASS — 900** |
 | Compiled-server smoke walkthrough | **PASS — 24 checks** |
+| Item-window auto-advance, targeted | **PASS — 4 checks** |
 | **Unity Round 3 client-shape check** | **PASS — 36/36** |
 | Unity Round 2 check (regression) | **PASS — 36/36** |
 | Unity engine check (regression) | **PASS — 49/49** |
 | Unity shared-systems check (regression) | **PASS — 43/43** |
 | Unity lobby check (regression) | **PASS — 47/47** |
 | IL2CPP Windows standalone build | **PASS** — 0 errors, 0 warnings |
+| **Physical two-phone test, Unity Host + real phones** | **PASS** |
 
 ### Think Fast was unplayable, and physical testing found it
 
@@ -400,6 +402,58 @@ Two things were wrong, and both are fixed:
 - **The TEST content.** Think Fast had 2 items and the streams had 8 — not
   enough to let a Host run a challenge long, which §15–§17 explicitly permit.
   Now 6 topics and 15–20 stream items.
+
+### A timed-out item window did nothing, and physical testing found that too
+
+§15, §16 and §17 all lock the same instruction: *"if nobody answers correctly,
+move to the next item."* `Round3.itemWindowExpired()` existed to detect this —
+but nothing ever called it. The window counted down to zero and then sat
+there, because no poller checked it and no Host action followed a timeout
+automatically. Reported from the physical test: a Guess the Logo item that
+nobody answered simply never advanced.
+
+`GameEngine.pollTimerExpiry()` and `pollClashResolution()` are both polled on
+the server's tick precisely so a stalled window cannot happen — this one was
+implemented on the `Round3` side but never wired into that same tick, an
+oversight rather than a design gap.
+
+Fixed by adding `round3ItemWindowExpired()` to the engine and a matching poll
+in the room's tick handler, alongside the existing timer and Clash polls. On
+expiry the room asks the content source for the next item — the same seam
+`HOST_NEXT_ROUND3_ITEM` uses — and reveals it automatically. If the source is
+exhausted the window is cleared without a replacement, so the poll does not
+re-report the same expiry forever; the Host then confirms a winner from
+whatever the scores show.
+
+Deliberately **not** given a scoring meaning: nobody answering does not score
+a point for anyone, per D-022 — a timeout decides nothing by itself unless a
+locked rule says otherwise, and none does here.
+
+Only ever applies to a `stream` challenge. Think Fast has one topic and no
+window at all, so there is nothing for it to expire.
+
+### The physical test
+
+Run on the real thing after the two runtime fixes above: the Unity Host on a
+Windows machine, two real phones on the LAN, the compiled game server, and the
+development Round 3 entry.
+
+Covered: room creation and QR join, two teams locked, game start, the
+development Round 3 entry, Think Fast with its auto-revealed topic and turn
+order from the previous round's standings, elimination down to one team,
+Guess the Logo with the game-supplied TEST logos, an item window running out
+with nobody answering and the challenge advancing on its own, All Answers
+Begin With with the game-supplied letter, Sing a Song judged by the Host,
+Host discretion to confirm before and after each target, the challenge-win
+counter incrementing separately from BB, a tied counter triggering the
+rock-paper-scissors tiebreaker with both hidden-choice assertions holding on
+real devices, a declared Round 3 winner, and a mid-round phone disconnect and
+reconnect with no duplicated score, counter or BB.
+
+**Two real bugs were found by physical testing, and both are fixed** — see
+below. Every automated test had passed before either was reported, because
+the fault in each case was in what the server (or the client) did around a
+correctly-behaving piece, not in the piece itself.
 
 ### The two JsonUtility traps, anticipated this time
 

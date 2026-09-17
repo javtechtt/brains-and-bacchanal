@@ -1978,6 +1978,23 @@ export class GameEngine {
   }
 
   /**
+   * Whether the current Round 3 item's window has run out.
+   *
+   * §15-§17 — "if nobody answers correctly, move to the next item." The room
+   * polls this and reveals the replacement, because only the room holds the
+   * content source.
+   */
+  round3ItemWindowExpired(): boolean {
+    if (!this.#started || this.paused) return false;
+    return this.#round3?.itemWindowExpired() ?? false;
+  }
+
+  /** Stop an expired window that has no replacement item. */
+  clearRound3ExpiredItem(): void {
+    this.#round3?.clearExpiredItem();
+  }
+
+  /**
    * Whether the running Round 3 challenge still needs its opening item.
    *
    * True for a `single` challenge (Think Fast) that has not revealed its topic

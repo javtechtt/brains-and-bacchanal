@@ -300,11 +300,43 @@ export class Round3 {
     return ok(view);
   }
 
-  /** Whether the current item's window has run out. Polled, never scheduled. */
+  /**
+   * Whether the current item's window has run out and should advance.
+   *
+   * §15-§17 — "if nobody answers correctly, move to the next item." So an
+   * expired window is a real instruction, not merely a fact: the item is over
+   * and the next one is due.
+   *
+   * Polled, never scheduled: `@bb/game-rules` owns no wall clock, exactly as
+   * the challenge timer and the Clash window are polled.
+   *
+   * Only ever true for a STREAM challenge. Think Fast has one topic and no
+   * window (§14), so there is nothing to expire.
+   */
   itemWindowExpired(): boolean {
     const slot = this.#currentSlot();
-    if (slot === null || slot.itemDeadline === null) return false;
+    if (slot === null || slot.progress !== 'in_progress') return false;
+    if (slot.definition.itemMode !== 'stream') return false;
+    if (slot.itemDeadline === null) return false;
     return hasExpired(this.#clock, slot.itemDeadline);
+  }
+
+  /**
+   * Clear an expired item without revealing a replacement.
+   *
+   * Used when the content source is exhausted: the window must still stop, or
+   * the poll would report the same expiry forever.
+   */
+  clearExpiredItem(): void {
+    const slot = this.#currentSlot();
+    if (slot === null) return;
+    slot.itemDeadline = null;
+  }
+
+  /** The challenge running now, for a caller that needs its type. */
+  currentChallengeType(): string | null {
+    const slot = this.#currentSlot();
+    return slot === null ? null : slot.definition.challengeType;
   }
 
   /** Pause and resume the running item window, with the game. D-011. */

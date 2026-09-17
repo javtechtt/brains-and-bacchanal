@@ -420,6 +420,74 @@ describe('the Market grants advantages under one stacking rule', () => {
   });
 });
 
+describe('withdrawing a purchase — the grocery-cart reading of §10', () => {
+  // "Purchases are final unless an effect grants refund" describes checkout —
+  // the Market closing — not every tap before it. A team that bought the
+  // wrong item can take it back out of the cart while still shopping.
+  it('refunds the actual price paid and frees the item to buy again', () => {
+    const { systems, ledger } = setup();
+    systems.market.open_(2);
+    const bought = systems.purchase({ teamId: TEAM_A, item: 'CLUE' });
+    expect(bought.ok).toBe(true);
+    expect(ledger.balanceOf(TEAM_A)).toBe(800);
+
+    if (!bought.ok) throw new Error('purchase failed');
+    const withdrawn = systems.withdrawPurchase(bought.value.purchaseId);
+
+    expect(withdrawn.ok).toBe(true);
+    if (withdrawn.ok) expect(withdrawn.value.refunded).toBe(200);
+    expect(ledger.balanceOf(TEAM_A)).toBe(1_000);
+
+    // Freed to buy the SAME item again, still within this Market visit — the
+    // "one copy per item per activation" rule only counts standing purchases.
+    expect(systems.purchase({ teamId: TEAM_A, item: 'CLUE' }).ok).toBe(true);
+  });
+
+  it('revokes the advantage the withdrawn purchase granted', () => {
+    const { systems } = setup();
+    systems.market.open_(2);
+    const bought = systems.purchase({ teamId: TEAM_A, item: 'EXTRA_TIME' });
+    expect(systems.advantages.usableFor(TEAM_A)).toHaveLength(1);
+
+    if (!bought.ok) throw new Error('purchase failed');
+    systems.withdrawPurchase(bought.value.purchaseId);
+
+    // Not just the purchase gone — the Extra Time it granted is gone too. A
+    // team must not keep an advantage whose Market slip no longer exists.
+    expect(systems.advantages.usableFor(TEAM_A)).toHaveLength(0);
+  });
+
+  it('refuses once the Market has closed — purchases are final at checkout', () => {
+    const { systems } = setup();
+    systems.market.open_(2);
+    const bought = systems.purchase({ teamId: TEAM_A, item: 'CLUE' });
+    if (!bought.ok) throw new Error('purchase failed');
+
+    systems.market.close();
+
+    const withdrawn = systems.withdrawPurchase(bought.value.purchaseId);
+    expect(withdrawn.ok).toBe(false);
+    if (!withdrawn.ok) expect(withdrawn.error.code).toBe('WRONG_STATE');
+  });
+
+  it('leaves an already-used advantage alone — too late to take back', () => {
+    const { systems } = setup();
+    systems.market.open_(2);
+    const bought = systems.purchase({ teamId: TEAM_A, item: 'CLUE' });
+    if (!bought.ok) throw new Error('purchase failed');
+
+    const clue = systems.advantages.usableFor(TEAM_A)[0]!;
+    systems.advantages.use({ teamId: TEAM_A, advantageId: clue.advantageId });
+
+    // The purchase itself can still be withdrawn (the item is unused per
+    // Market.cancelPurchase's own rule — using the ADVANTAGE is not the same
+    // as using the Market ITEM), refunding what was paid, but the spent
+    // advantage does not un-spend itself.
+    const withdrawn = systems.withdrawPurchase(bought.value.purchaseId);
+    expect(withdrawn.ok).toBe(true);
+  });
+});
+
 describe('challenge and round boundaries', () => {
   it('resets per-challenge budgets but keeps hands and advantages', () => {
     const { systems } = setup();

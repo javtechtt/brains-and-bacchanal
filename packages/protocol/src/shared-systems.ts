@@ -88,6 +88,17 @@ export const SHARED_INTENTS = {
   HOST_CLOSE_MARKET: 'HOST_CLOSE_MARKET',
   /** A team buys one item. Player intent, hidden until close. */
   PURCHASE_MARKET_ITEM: 'PURCHASE_MARKET_ITEM',
+  /**
+   * A team removes its OWN unrevealed item from its cart, while the Market is
+   * still open. Player intent.
+   *
+   * GAME_RULES_LOCKED.md §10 — "purchases are final" describes checkout: the
+   * moment the Market closes and purchases reveal. Nothing in the locked rule
+   * says a selection cannot change before then, so a team that tapped the
+   * wrong item is not stuck with it — same as taking something back out of a
+   * grocery cart before paying. Refused once the Market closes.
+   */
+  WITHDRAW_MARKET_PURCHASE: 'WITHDRAW_MARKET_PURCHASE',
   /** Host expires items whose round has ended. §10. */
   HOST_EXPIRE_MARKET_ITEMS: 'HOST_EXPIRE_MARKET_ITEMS',
 
@@ -152,6 +163,8 @@ export const SHARED_EVENTS = {
   MARKET_OPENED: 'MARKET_OPENED',
   /** A team bought something. Carries no item while hidden — §42. */
   MARKET_PURCHASE_RECORDED: 'MARKET_PURCHASE_RECORDED',
+  /** A team removed its own item from its cart. Carries no item — §42. */
+  MARKET_PURCHASE_WITHDRAWN: 'MARKET_PURCHASE_WITHDRAWN',
   MARKET_CLOSED: 'MARKET_CLOSED',
   MARKET_ITEMS_EXPIRED: 'MARKET_ITEMS_EXPIRED',
 

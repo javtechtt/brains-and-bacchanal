@@ -493,6 +493,85 @@ describe('the Market over a real socket', () => {
     }
   });
 
+  it('lets a team withdraw its own item from the cart while shopping, but not an opponent\'s', async () => {
+    // The grocery-cart reading of §10: "purchases are final" describes
+    // checkout (the Market closing), not every tap before it.
+    const party = await makeGame();
+    try {
+      await party.host.submit(SHARED_INTENTS.HOST_OPEN_MARKET, { round: 2 });
+
+      const bought = await party.p1.submit(SHARED_INTENTS.PURCHASE_MARKET_ITEM, {
+        item: 'CLUE',
+      });
+      expect(bought.ok).toBe(true);
+
+      const afterBuy = await playerSnapshot(party.p1);
+      expect(afterBuy.teams.find((t) => t.teamId === 'TEAM_A')?.bb).toBe(800);
+      const purchaseId = afterBuy.shared?.market.yourPurchases[0]?.purchaseId;
+      expect(purchaseId).toBeDefined();
+
+      // Team B cannot withdraw Team A's purchase by guessing its id.
+      const stolen = await party.p2.submit(SHARED_INTENTS.WITHDRAW_MARKET_PURCHASE, {
+        purchaseId,
+      });
+      expect(stolen.ok).toBe(false);
+
+      // Team A takes it back out of the cart.
+      const withdrawn = await party.p1.submit(SHARED_INTENTS.WITHDRAW_MARKET_PURCHASE, {
+        purchaseId,
+      });
+      expect(withdrawn.ok).toBe(true);
+
+      const afterWithdraw = await playerSnapshot(party.p1);
+      expect(afterWithdraw.teams.find((t) => t.teamId === 'TEAM_A')?.bb).toBe(1_000);
+      // Still visible in the team's OWN history, marked cancelled — a team
+      // should see what it withdrew, not have it silently vanish. The "one
+      // copy per item" rule is what actually frees back up (checked below).
+      expect(afterWithdraw.shared?.market.yourPurchases).toHaveLength(1);
+      expect(afterWithdraw.shared?.market.yourPurchases[0]?.cancelled).toBe(true);
+
+      // Free to buy the same item again, still in this Market visit.
+      const rebought = await party.p1.submit(SHARED_INTENTS.PURCHASE_MARKET_ITEM, {
+        item: 'CLUE',
+      });
+      expect(rebought.ok).toBe(true);
+
+      // Never revealed to Team B — no purchase, no withdrawal, no leaked id.
+      const p2View = await playerSnapshot(party.p2);
+      expect(p2View.shared?.market.otherTeamPurchases).toHaveLength(0);
+      expect(JSON.stringify(p2View)).not.toContain(purchaseId as string);
+    } finally {
+      await closeParty(party);
+    }
+  });
+
+  it('refuses to withdraw once the Market has closed', async () => {
+    const party = await makeGame();
+    try {
+      await party.host.submit(SHARED_INTENTS.HOST_OPEN_MARKET, { round: 2 });
+      const bought = await party.p1.submit(SHARED_INTENTS.PURCHASE_MARKET_ITEM, {
+        item: 'CLUE',
+      });
+      expect(bought.ok).toBe(true);
+
+      const afterBuy = await playerSnapshot(party.p1);
+      const purchaseId = afterBuy.shared?.market.yourPurchases[0]?.purchaseId;
+
+      await party.host.submit(SHARED_INTENTS.HOST_CLOSE_MARKET, {});
+
+      const withdrawn = await party.p1.submit(SHARED_INTENTS.WITHDRAW_MARKET_PURCHASE, {
+        purchaseId,
+      });
+      expect(withdrawn.ok).toBe(false);
+
+      // Still there, unchanged — closing the Market is checkout.
+      const afterClose = await playerSnapshot(party.p1);
+      expect(afterClose.teams.find((t) => t.teamId === 'TEAM_A')?.bb).toBe(800);
+    } finally {
+      await closeParty(party);
+    }
+  });
+
   it("freezes an opponent's visible BB while shopping stays hidden, unfreezing at close", async () => {
     // A live BB drop would leak "they bought something" even though WHAT they
     // bought stays hidden (§10) — the same information the item-hiding rule

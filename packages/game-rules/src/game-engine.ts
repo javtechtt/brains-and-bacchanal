@@ -1321,6 +1321,51 @@ export class GameEngine {
     });
   }
 
+  /**
+   * A team removes its OWN unrevealed item from its cart.
+   *
+   * GAME_RULES_LOCKED.md §10's "purchases are final" describes checkout — the
+   * Market closing — not every tap before it. Refused once the Market closes
+   * (`SharedSystems.withdrawPurchase`), and refused here if the purchase does
+   * not belong to the calling team: OWNERSHIP IS CHECKED BEFORE ANYTHING ELSE,
+   * the same discipline every other Phase 6 player intent uses, so a team
+   * cannot even learn whether a purchaseId exists by probing this.
+   */
+  withdrawMarketPurchase(input: {
+    readonly teamId: TeamId;
+    readonly purchaseId: string;
+  }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    if (!this.#teams.has(input.teamId)) {
+      return err(rejection('NOT_FOUND', 'Unknown team.', { teamId: input.teamId }));
+    }
+
+    const owns = this.#shared.market
+      .purchasesFor(input.teamId)
+      .some((p) => p.purchaseId === input.purchaseId);
+    if (!owns) {
+      return err(rejection('NOT_FOUND', 'No such purchase.', { purchaseId: input.purchaseId }));
+    }
+
+    const withdrawn = this.#shared.withdrawPurchase(input.purchaseId);
+    if (!withdrawn.ok) return err(withdrawn.error);
+
+    return ok({
+      type: 'MARKET_PURCHASE_WITHDRAWN',
+      payload: {
+        // WHO withdrew, never WHAT — the same secrecy MARKET_PURCHASE_RECORDED
+        // keeps. A team's own withdrawal reaches THEM in their own
+        // acknowledgement; opponents learn nothing beyond "the balance moved
+        // back", which the frozen-BB view already hides until the Market
+        // closes (see #teamsForPlayer in room.ts).
+        teamId: input.teamId,
+        teams: this.teams(),
+      },
+    });
+  }
+
   /** Draw one Maco Mail card for a team. */
   drawMacoMail(input: {
     readonly teamId: TeamId;

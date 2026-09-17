@@ -247,6 +247,77 @@ describe('Bacchanal Immunity', () => {
   });
 });
 
+describe('revokeForPurchase — a Market purchase and its advantage move together', () => {
+  // A purchase and the advantage it grants were two separate records the
+  // moment a purchase could stop existing — first the Maco Mail Cancel Market
+  // Purchase card, and now a team withdrawing its own item before the Market
+  // closes. Neither destroying the purchase alone would revoke the advantage,
+  // leaving a team holding a Clue whose Market slip no longer exists.
+  it('removes an unused advantage by its purchaseId', () => {
+    const advantages = setup();
+    const granted = advantages.grant({
+      teamId: TEAM_A,
+      type: 'CLUE',
+      source: 'market',
+      purchaseId: 'purchase-1',
+      expiresAfterRound: 2,
+    });
+
+    const revoked = advantages.revokeForPurchase('purchase-1');
+    expect(revoked?.advantageId).toBe(granted.advantageId);
+    expect(advantages.usableFor(TEAM_A)).toHaveLength(0);
+  });
+
+  it('returns null when the purchase granted no advantage', () => {
+    // Buying Maco Mail from the Market grants no advantage at all (it grants a
+    // DRAW) — revoking a purchase like that must not error.
+    const advantages = setup();
+    expect(advantages.revokeForPurchase('never-granted-anything')).toBeNull();
+  });
+
+  it('refuses to revoke an advantage the team already used', () => {
+    // Too late — the team already asked for the clue. Same rule Cancel Market
+    // Purchase already enforces against a USED purchase.
+    const advantages = setup();
+    const granted = advantages.grant({
+      teamId: TEAM_A,
+      type: 'CLUE',
+      source: 'market',
+      purchaseId: 'purchase-1',
+      expiresAfterRound: 2,
+    });
+    advantages.use({ teamId: TEAM_A, advantageId: granted.advantageId });
+
+    expect(advantages.revokeForPurchase('purchase-1')).toBeNull();
+    // Still spent, not un-used by the failed revoke.
+    expect(advantages.usageFor(TEAM_A)).toBeDefined();
+  });
+
+  it('leaves other advantages from other purchases untouched', () => {
+    const advantages = setup();
+    advantages.grant({
+      teamId: TEAM_A,
+      type: 'CLUE',
+      source: 'market',
+      purchaseId: 'purchase-1',
+      expiresAfterRound: 2,
+    });
+    advantages.grant({
+      teamId: TEAM_A,
+      type: 'EXTRA_TIME',
+      source: 'market',
+      purchaseId: 'purchase-2',
+      expiresAfterRound: 2,
+    });
+
+    advantages.revokeForPurchase('purchase-1');
+
+    const remaining = advantages.usableFor(TEAM_A);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]?.type).toBe('EXTRA_TIME');
+  });
+});
+
 describe('Market items map to advantages', () => {
   it('maps each advantage-granting item', () => {
     expect(advantageForMarketItem('CLUE')).toBe('CLUE');

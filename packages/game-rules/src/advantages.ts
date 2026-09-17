@@ -300,6 +300,33 @@ export class Advantages {
     return { ...record };
   }
 
+  /**
+   * Remove the advantage a Market purchase granted, because that purchase no
+   * longer stands.
+   *
+   * A GAP THIS CLOSES: a Market purchase and its advantage were two separate
+   * records the moment a purchase could stop existing — first from the Maco
+   * Mail Cancel Market Purchase card, and now from a team withdrawing its own
+   * unrevealed item before the Market closes (the grocery-cart reading of
+   * §10: "purchases are final" describes checkout, not every click before it).
+   * Neither path ever revoked the advantage, so a team could lose the item on
+   * the receipt and keep the Clue anyway.
+   *
+   * Only removes an UNUSED advantage — if the team already spent it (already
+   * asked for the clue, already doubled a reward), it is too late to take
+   * back, exactly as Cancel Market Purchase already refuses to destroy a USED
+   * purchase. Returns null when there is nothing to revoke, which the caller
+   * treats as "nothing to undo" rather than an error — a purchase that never
+   * granted an advantage (Maco Mail, say) legitimately has none.
+   */
+  revokeForPurchase(purchaseId: string): HeldAdvantageView | null {
+    const index = this.#held.findIndex((a) => a.purchaseId === purchaseId && !a.used);
+    if (index === -1) return null;
+
+    const [record] = this.#held.splice(index, 1);
+    return record === undefined ? null : { ...record };
+  }
+
   // -------------------------------------------------------------------------
   // Challenge and round boundaries
   // -------------------------------------------------------------------------

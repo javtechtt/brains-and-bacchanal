@@ -347,6 +347,47 @@ purchase reveal — the same moment §10 already reveals purchases.
 *player* snapshot (`room.ts`); the Host's own `teams` stays fully live, because
 the Host adjudicates and already sees every purchase as it happens.
 
+### Withdrawing a purchase — the grocery-cart reading of §10
+
+§10 says "purchases are final unless an effect grants refund." Read literally
+on its own, that line could be taken to mean a purchase is locked in the
+instant it is made. It is not: the surrounding rules describe a Market
+**visit** — "multiple different items may be purchased", "shopping is
+hidden", "purchases reveal when Market closes" — and "final" is what happens
+at the end of that visit, at **checkout**, not at every tap along the way.
+The same way putting a second item in a grocery cart and later taking the
+first one back out is not "undoing a purchase" — the purchase happens at the
+register.
+
+So while the Market is **open**, a team may withdraw its own unrevealed
+purchase (`WITHDRAW_MARKET_PURCHASE`, `SharedSystems.withdrawPurchase`):
+
+- refunds the actual price paid, through the ledger, exactly like Cancel
+  Market Purchase,
+- frees the item to be bought again (or something else instead) — the "one
+  copy per item per activation" rule only counts **standing** purchases,
+- stays hidden exactly like the purchase itself was: the withdrawal reaches
+  only the withdrawing team, and an opponent's snapshot never carries the
+  purchase id needed to attempt one,
+- is refused the instant the Market **closes** — that is checkout, and from
+  that moment §10's "final" applies in full.
+
+**Ownership is checked before anything else.** The engine verifies the
+purchase actually belongs to the calling team before touching it, the same
+discipline every other Phase 6 player intent uses — a team cannot even learn
+whether a purchaseId exists by guessing one.
+
+**The advantage moves with the purchase.** A purchase and the advantage it
+grants (a Clue from buying `CLUE`, say) were two separate records the moment
+either could stop existing — first from Maco Mail's Cancel Market Purchase
+card, now from a team's own withdrawal too. `Advantages.revokeForPurchase`
+removes an **unused** advantage by the purchaseId that granted it; both
+`SharedSystems.cancelPurchase` (the coordination point both paths now share)
+and the Maco Mail card call it, so neither can leave a team holding an
+advantage whose Market slip no longer exists. Already-used advantages are
+left alone — the same rule Cancel Market Purchase already applies to a
+**used** purchase.
+
 ### Expiry
 
 §10 — items "expire after the immediately following round". Bought before Round

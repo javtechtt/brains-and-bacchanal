@@ -417,6 +417,13 @@ export class MacoMail {
         const cancelled = this.#market.cancelPurchase(chosen.purchaseId);
         if (!cancelled.ok) return dud('That Market item could not be cancelled.');
 
+        // The purchase and the advantage it granted are two records the
+        // moment the purchase can stop existing — destroying only the
+        // purchase would leave its owner holding a Clue, an Extra Time or a
+        // Double whose Market slip no longer exists. Silently a no-op when
+        // the destroyed item never granted an advantage (Maco Mail, say).
+        this.#advantages.revokeForPurchase(chosen.purchaseId);
+
         return {
           result: 'applied',
           bbApplied: 0,

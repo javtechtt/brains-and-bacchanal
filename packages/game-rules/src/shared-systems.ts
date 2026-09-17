@@ -12,6 +12,7 @@ import {
   type ClashResult,
   type HostSharedSystemsView,
   type MarketItem,
+  type MarketPurchaseView,
   type PlayerSharedSystemsView,
   type Result,
   type TeamId,
@@ -465,6 +466,62 @@ export class SharedSystems {
     }
 
     return ok({ purchaseId: bought.value.purchaseId, pricePaid: bought.value.pricePaid });
+  }
+
+  /**
+   * Cancel a purchase and revoke whatever advantage it granted.
+   *
+   * THE COORDINATION POINT `purchase()` HAS ON THE WAY IN, mirrored on the way
+   * out. A purchase and the advantage it grants are two records the moment a
+   * purchase can stop existing — either because the OWNING team withdraws its
+   * own unrevealed item before the Market closes (§10's "final" describes
+   * checkout, not every click before it — see `withdrawPurchase`), or because
+   * an OPPONENT destroys it with Maco Mail's Cancel Market Purchase. Both paths
+   * call this, so neither can leave a team holding an advantage whose purchase
+   * no longer exists.
+   *
+   * Refunds through the ledger exactly as `Market.cancelPurchase` always did;
+   * the only change is that the advantage is now revoked in the same
+   * operation rather than surviving it.
+   */
+  cancelPurchase(
+    purchaseId: string,
+  ): Result<{ readonly purchase: MarketPurchaseView; readonly refunded: number }> {
+    const cancelled = this.market.cancelPurchase(purchaseId);
+    if (!cancelled.ok) return err(cancelled.error);
+
+    // Silently does nothing when there was no advantage to revoke (Maco Mail,
+    // say, grants none) — see revokeForPurchase's own contract for why that is
+    // the correct non-error outcome.
+    this.advantages.revokeForPurchase(purchaseId);
+
+    return ok(cancelled.value);
+  }
+
+  /**
+   * A team removes its OWN unrevealed item from its cart.
+   *
+   * THE GROCERY-CART READING OF §10. "Purchases are final unless an effect
+   * grants refund" describes what happens once the Market closes and reveals
+   * — that is checkout. Nothing in the locked rule says a selection cannot be
+   * changed while still shopping, before checkout, and a team that tapped the
+   * wrong item should not be stuck with it for the rest of the round because
+   * of that reading.
+   *
+   * Deliberately NOT the same intent as Cancel Market Purchase: this only
+   * ever targets the CALLING team's own purchase (the room enforces that —
+   * see #withdrawMarketPurchase), refunds through the same ledger path, and
+   * — because §10 also requires "max one copy of each item per Market visit"
+   * scoped to items still standing — leaves the team free to buy the same
+   * item again, or something else, before the Market closes.
+   */
+  withdrawPurchase(
+    purchaseId: string,
+  ): Result<{ readonly purchase: MarketPurchaseView; readonly refunded: number }> {
+    if (!this.market.open) {
+      return err(rejection('WRONG_STATE', 'The Market is closed. Purchases are now final.'));
+    }
+    return this.cancelPurchase(purchaseId);
   }
 
   // -------------------------------------------------------------------------

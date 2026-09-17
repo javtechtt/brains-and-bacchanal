@@ -595,6 +595,8 @@ export class Room {
         return this.#respondToClash(connectionId, intent);
       case SHARED_INTENTS.PURCHASE_MARKET_ITEM:
         return this.#purchaseMarketItem(connectionId, intent);
+      case SHARED_INTENTS.WITHDRAW_MARKET_PURCHASE:
+        return this.#withdrawMarketPurchase(connectionId, intent);
       case SHARED_INTENTS.USE_ADVANTAGE:
         return this.#useAdvantage(connectionId, intent);
       case SHARED_INTENTS.RESPOND_TO_HOST_DEAL:
@@ -1687,6 +1689,45 @@ export class Room {
 
     return {
       // Only the buyer learns what was bought, and only in their own reply.
+      ack: ok({ seq: event.seq, payload: this.#game.shared.market.teamView(team.value) }),
+      broadcast: [event],
+      direct: [],
+      closeConnections: [],
+    };
+  }
+
+  /**
+   * A team removes its OWN unrevealed item from its cart.
+   *
+   * The grocery-cart reading of §10 — "purchases are final" describes
+   * checkout (the Market closing), not every tap before it. `#requireTeam`
+   * resolves who is asking from the CONNECTION exactly as `#purchaseMarketItem`
+   * does; the engine then checks that team actually owns the purchaseId given,
+   * so a phone cannot withdraw an opponent's item by guessing its id.
+   */
+  #withdrawMarketPurchase(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const team = this.#requireTeam(connectionId);
+    if (!team.ok) return this.#reject(team.error);
+
+    const purchaseId = readString(intent.payload, 'purchaseId');
+    if (purchaseId === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing purchaseId.'));
+    }
+
+    const outcome = this.#game.withdrawMarketPurchase({ teamId: team.value, purchaseId });
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    this.#touch();
+    const event = this.#log.append(
+      outcome.value.type,
+      { kind: 'player', sessionId: '' as never, playerId: '' as never },
+      outcome.value.payload,
+      intent.intentId,
+    );
+
+    return {
+      // Same secrecy shape as a purchase: the withdrawing team learns its own
+      // updated cart, and the broadcast names WHO acted, never WHAT.
       ack: ok({ seq: event.seq, payload: this.#game.shared.market.teamView(team.value) }),
       broadcast: [event],
       direct: [],

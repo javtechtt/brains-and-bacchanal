@@ -138,18 +138,40 @@ export function PlayerSharedSystems({
         </Section>
       )}
 
-      {/* Own purchases, always visible to their buyer. */}
+      {/* Own purchases, always visible to their buyer.
+          A purchase can be taken back out of the cart while the Market is
+          still open — GAME_RULES_LOCKED.md §10's "purchases are final"
+          describes checkout (the Market closing), not every tap before it. */}
       {shared.market.yourPurchases.length > 0 && (
         <Section title="YOUR PURCHASES">
-          {shared.market.yourPurchases.map((purchase) => (
-            <Row
-              key={purchase.purchaseId}
-              left={MARKET_ITEM_LABELS[purchase.item]}
-              right={`${purchase.pricePaid} BB${purchase.cancelled ? ' · cancelled' : ''}${
-                purchase.expired ? ' · expired' : ''
-              }`}
-            />
-          ))}
+          {shared.market.yourPurchases.map((purchase) => {
+            const canWithdraw =
+              shared.market.market?.open === true && !purchase.cancelled && !purchase.used;
+            return (
+              <div key={purchase.purchaseId} style={{ marginBottom: ui.SPACING.xs }}>
+                <Row
+                  left={MARKET_ITEM_LABELS[purchase.item]}
+                  right={`${purchase.pricePaid} BB${purchase.cancelled ? ' · cancelled' : ''}${
+                    purchase.expired ? ' · expired' : ''
+                  }`}
+                />
+                {canWithdraw && (
+                  <button
+                    type="button"
+                    disabled={busy || paused}
+                    style={{ ...ui.secondaryButton, width: '100%', marginTop: 2 }}
+                    onClick={() =>
+                      act(SHARED_INTENTS.WITHDRAW_MARKET_PURCHASE, {
+                        purchaseId: purchase.purchaseId,
+                      })
+                    }
+                  >
+                    REMOVE FROM CART
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </Section>
       )}
 

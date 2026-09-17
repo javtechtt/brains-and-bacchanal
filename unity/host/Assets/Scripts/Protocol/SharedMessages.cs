@@ -63,8 +63,14 @@ namespace BrainsAndBacchanal.Protocol
         public const string MarketOpened = "MARKET_OPENED";
         public const string MarketPurchaseRecorded = "MARKET_PURCHASE_RECORDED";
         public const string MarketClosed = "MARKET_CLOSED";
+        public const string MarketItemsExpired = "MARKET_ITEMS_EXPIRED";
         public const string MacoMailDrawn = "MACO_MAIL_DRAWN";
+        public const string MacoMailResolved = "MACO_MAIL_RESOLVED";
+        public const string AdvantageGranted = "ADVANTAGE_GRANTED";
         public const string AdvantageUsed = "ADVANTAGE_USED";
+        public const string AdvantageExpired = "ADVANTAGE_EXPIRED";
+        public const string HeldEffectPlaced = "HELD_EFFECT_PLACED";
+        public const string HeldEffectConsumed = "HELD_EFFECT_CONSUMED";
         public const string HostDealOffered = "HOST_DEAL_OFFERED";
         public const string HostDealResolved = "HOST_DEAL_RESOLVED";
         public const string WagerLocked = "WAGER_LOCKED";

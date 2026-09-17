@@ -223,6 +223,39 @@ namespace BrainsAndBacchanal
                 case GameEvents.ReviewRequested:
                 case GameEvents.GamePaused:
                 case GameEvents.GameResumed:
+                // Phase 6 shared-systems events. THIS LIST WAS MISSING ENTIRELY
+                // until reported: a player action — most noticeably locking a
+                // wager — never reached the Host's screen until some OTHER,
+                // Phase-5 event happened to trigger a refresh afterward. Same
+                // root cause as the identical bug on the web player's side
+                // (GAME_EVENT_PREFIXES in apps/web), just unfixed here because
+                // Unity has its own separate event switch rather than a shared
+                // prefix list.
+                case SharedEvents.BacchanalCardsDealt:
+                case SharedEvents.CardWindowOpened:
+                case SharedEvents.CardWindowClosed:
+                case SharedEvents.BacchanalCardPlayed:
+                case SharedEvents.ClashOpened:
+                case SharedEvents.ClashResponseReceived:
+                case SharedEvents.ClashResolved:
+                case SharedEvents.PartDatFight:
+                case SharedEvents.CardEffectApplied:
+                case SharedEvents.BacchanalImmunityTriggered:
+                case SharedEvents.MarketOpened:
+                case SharedEvents.MarketPurchaseRecorded:
+                case SharedEvents.MarketClosed:
+                case SharedEvents.MarketItemsExpired:
+                case SharedEvents.MacoMailDrawn:
+                case SharedEvents.MacoMailResolved:
+                case SharedEvents.AdvantageGranted:
+                case SharedEvents.AdvantageUsed:
+                case SharedEvents.AdvantageExpired:
+                case SharedEvents.HeldEffectPlaced:
+                case SharedEvents.HeldEffectConsumed:
+                case SharedEvents.HostDealOffered:
+                case SharedEvents.HostDealResolved:
+                case SharedEvents.WagerLocked:
+                case SharedEvents.WagerResolved:
                     _lastEvent = envelope.type;
                     _ = RefreshGameSnapshotAsync();
                     break;

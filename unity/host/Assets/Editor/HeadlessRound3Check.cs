@@ -156,6 +156,21 @@ namespace BrainsAndBacchanal.EditorTools
                 current?.thinkFast != null && current.thinkFast.HasCurrentTeam,
                 "currentTeamId was empty");
 
+            // §14 — ONE topic, revealed when the challenge starts. No NEXT ITEM
+            // was sent, and pressing it must be refused.
+            Check("Think Fast reveals its topic automatically",
+                current?.currentItem != null && current.currentItem.Exists
+                && current.currentItem.body.Contains("TEST TOPIC"),
+                "no topic on screen at start");
+            Check("Think Fast reports itself single-item",
+                current != null && !current.UsesItemStream,
+                "itemMode=" + current?.itemMode);
+
+            var secondTopic = await hostClient.SubmitAsync(Round3Intents.NextItem, "{}")
+                .ConfigureAwait(false);
+            Check("a second Think Fast topic is refused",
+                secondTopic != null && !secondTopic.ok, Describe(secondTopic));
+
             var firstTeam = current?.thinkFast?.currentTeamId ?? "";
             await hostClient.SubmitAsync(Round3Intents.ThinkFastValid, "{}").ConfigureAwait(false);
             var afterValid = await GameSnapshot(hostClient).ConfigureAwait(false);

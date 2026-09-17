@@ -125,6 +125,14 @@ would have quietly become the production flow.
 
 ## Think Fast — §14
 
+**One topic for the whole challenge.** §14 describes teams alternating answers
+against a single topic ("name things in a kitchen") until one remains — there is
+no next item, and the topic IS the challenge.
+
+So the topic is revealed **automatically when the challenge starts**, and a
+second reveal is refused. Every definition declares `itemMode`: `single` for
+Think Fast, `stream` for the other three, which each advance item by item.
+
 Turn-based elimination. A team that cannot give another valid answer is out of
 *this challenge*; the last team still answering wins 500 BB and one Round 3 win.
 
@@ -361,16 +369,37 @@ are built from the same source in one place so they cannot disagree.
 | Check | Result |
 |---|---|
 | `pnpm typecheck` / `lint` / `test` / `build` | **PASS** |
-| Deterministic Round 3 rule tests (FakeClock) | **PASS — 66 new** |
+| Deterministic Round 3 rule tests (FakeClock) | **PASS — 71 new** |
 | Round 3 end-to-end over real WebSockets | **PASS — 14 new** |
-| Total suite | **PASS — 889** |
-| Compiled-server smoke walkthrough | **PASS — 22 checks** |
-| **Unity Round 3 client-shape check** | **PASS — 33/33** |
+| Total suite | **PASS — 894** |
+| Compiled-server smoke walkthrough | **PASS — 24 checks** |
+| **Unity Round 3 client-shape check** | **PASS — 36/36** |
 | Unity Round 2 check (regression) | **PASS — 36/36** |
 | Unity engine check (regression) | **PASS — 49/49** |
 | Unity shared-systems check (regression) | **PASS — 43/43** |
 | Unity lobby check (regression) | **PASS — 47/47** |
 | IL2CPP Windows standalone build | **PASS** — 0 errors, 0 warnings |
+
+### Think Fast was unplayable, and physical testing found it
+
+The first Phase 7B build treated all four challenges as item streams, so Think
+Fast's topic could only be revealed with NEXT ITEM. A Host pressing it twice
+exhausted the TEST pack and the challenge could not be run at all — reported
+from a real two-phone session as *"the content source has no more items for this
+challenge."*
+
+Every automated test had passed, because every one of them either confirmed the
+challenge immediately or never pressed NEXT twice. The bug lived in the gap
+between "the server behaves correctly" and "a Host can actually run this".
+
+Two things were wrong, and both are fixed:
+
+- **The model.** §14 has ONE topic; the other three have streams. That is now
+  `itemMode` on the definition, the topic is revealed when the challenge starts,
+  a second reveal is refused, and the Host panel offers no NEXT button there.
+- **The TEST content.** Think Fast had 2 items and the streams had 8 — not
+  enough to let a Host run a challenge long, which §15–§17 explicitly permit.
+  Now 6 topics and 15–20 stream items.
 
 ### The two JsonUtility traps, anticipated this time
 

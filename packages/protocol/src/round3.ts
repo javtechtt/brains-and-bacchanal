@@ -103,6 +103,27 @@ export interface Round3ChallengeDefinition {
   readonly targetScore: number | null;
   /** Seconds per content item. Null for Think Fast, whose timer is still open. */
   readonly itemWindowMs: number | null;
+  /**
+   * How content is consumed.
+   *
+   *   'single'  ONE item for the whole challenge, revealed when it starts.
+   *   'stream'  a series of items, the Host advancing with NEXT.
+   *
+   * ================== WHY THIS DISTINCTION EXISTS ==================
+   * Think Fast is ONE TOPIC (§14): "name things in a kitchen", and teams then
+   * alternate answers against that topic until one remains. There is no next
+   * item — the topic IS the challenge.
+   *
+   * The other three are streams (§15-§17): a series of logos, prompts or
+   * scenarios, each with its own 10-second window.
+   *
+   * Modelled explicitly because treating Think Fast as a stream is exactly the
+   * mistake that shipped in the first Phase 7B build: NEXT ITEM was the only
+   * way to reveal its topic, and a Host pressing it twice exhausted the pack
+   * and could not run the challenge at all.
+   * ================================================================
+   */
+  readonly itemMode: 'single' | 'stream';
   readonly cardChallengeKind: CardChallengeKind;
 }
 
@@ -132,6 +153,7 @@ export const ROUND3_CHALLENGES: readonly Round3ChallengeDefinition[] = [
     // the caller supplies one from configuration, exactly as every other
     // undecided duration in this project does.
     itemWindowMs: null,
+    itemMode: 'single',
     cardChallengeKind: 'THINK_FAST',
   },
   {
@@ -143,6 +165,7 @@ export const ROUND3_CHALLENGES: readonly Round3ChallengeDefinition[] = [
     baseRewardBb: 0,
     targetScore: 5,
     itemWindowMs: ROUND3_ITEM_WINDOW_MS,
+    itemMode: 'stream',
     cardChallengeKind: 'GUESS_THE_LOGO',
   },
   {
@@ -154,6 +177,7 @@ export const ROUND3_CHALLENGES: readonly Round3ChallengeDefinition[] = [
     baseRewardBb: 0,
     targetScore: 5,
     itemWindowMs: ROUND3_ITEM_WINDOW_MS,
+    itemMode: 'stream',
     cardChallengeKind: 'ALL_ANSWERS_BEGIN_WITH',
   },
   {
@@ -165,6 +189,7 @@ export const ROUND3_CHALLENGES: readonly Round3ChallengeDefinition[] = [
     baseRewardBb: ROUND3_BB_CHALLENGE_REWARD,
     targetScore: 3,
     itemWindowMs: ROUND3_ITEM_WINDOW_MS,
+    itemMode: 'stream',
     cardChallengeKind: 'SING_A_SONG',
   },
 ];
@@ -393,6 +418,8 @@ export interface Round3ChallengeView {
   readonly displayName: string;
   readonly order: number;
   readonly format: Round3Format;
+  /** 'single' (one topic, Think Fast) or 'stream' (a series of items). */
+  readonly itemMode: 'single' | 'stream';
   readonly progress: Round3ChallengeProgress;
   readonly challengeId: ChallengeId | null;
   /**

@@ -1172,3 +1172,81 @@ describe('three-team rock-paper-scissors', () => {
     expect(threeTeamRound().participatingTeamIds).toHaveLength(3);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Think Fast uses ONE topic — regression
+//
+// Found in physical testing: NEXT ITEM was the only way to reveal Think Fast's
+// topic, so a Host pressing it twice exhausted the TEST pack and the challenge
+// could not be run at all ("the content source has no more items").
+//
+// §14 describes ONE topic per challenge, with teams alternating answers against
+// it. There is no next item, so the topic is revealed when the challenge starts
+// and a second reveal is refused.
+// ---------------------------------------------------------------------------
+
+describe('Think Fast has one topic for the whole challenge', () => {
+  it('reveals its topic automatically when the challenge starts', () => {
+    const h = makeRoom();
+    enterRound3(h);
+    beginChallenge(h);
+
+    // No HOST_NEXT_ROUND3_ITEM was sent, and the topic is already on screen.
+    const item = h.round3().current?.currentItem;
+    expect(item).not.toBeNull();
+    expect(item?.body).toContain('TEST TOPIC');
+    expect(item?.index).toBe(1);
+  });
+
+  it('refuses a second topic', () => {
+    const h = makeRoom();
+    enterRound3(h);
+    beginChallenge(h);
+    const first = h.round3().current?.currentItem?.itemId;
+
+    const second = h.host(ROUND3_INTENTS.HOST_NEXT_ROUND3_ITEM);
+    expect(second.ack.ok).toBe(false);
+    if (!second.ack.ok) expect(second.ack.error.code).toBe('ILLEGAL_ACTION');
+    // The topic teams are mid-way through answering is untouched.
+    expect(h.round3().current?.currentItem?.itemId).toBe(first);
+  });
+
+  it('declares itself single-item, unlike the other three', () => {
+    const h = makeRoom();
+    enterRound3(h);
+    beginChallenge(h);
+    expect(h.round3().current?.itemMode).toBe('single');
+
+    h.host(ROUND3_INTENTS.HOST_CONFIRM_ROUND3_CHALLENGE, { teamId: TEAM_A });
+    beginChallenge(h);
+    expect(h.round3().current?.itemMode).toBe('stream');
+  });
+
+  it('leaves a stream challenge free to advance', () => {
+    const h = makeRoom();
+    enterRound3(h);
+    playChallenge(h, TEAM_A);
+    beginChallenge(h); // Guess the Logo
+
+    h.host(ROUND3_INTENTS.HOST_NEXT_ROUND3_ITEM);
+    h.host(ROUND3_INTENTS.HOST_NEXT_ROUND3_ITEM);
+    const third = h.host(ROUND3_INTENTS.HOST_NEXT_ROUND3_ITEM);
+    expect(third.ack.ok).toBe(true);
+    expect(h.round3().current?.currentItem?.index).toBe(3);
+  });
+
+  it('has enough TEST content to run a challenge well past its target', () => {
+    // The other half of the reported failure: a Host may let a challenge run
+    // long (§15-§17), and 8 items was not generous enough to do that twice.
+    const h = makeRoom();
+    enterRound3(h);
+    playChallenge(h, TEAM_A);
+    beginChallenge(h);
+
+    for (let i = 0; i < 15; i += 1) {
+      const next = h.host(ROUND3_INTENTS.HOST_NEXT_ROUND3_ITEM);
+      expect(next.ack.ok).toBe(true);
+    }
+    expect(h.round3().current?.currentItem?.index).toBe(15);
+  });
+});

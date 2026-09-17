@@ -196,6 +196,15 @@ namespace BrainsAndBacchanal.Protocol
         public string displayName;
         public int order;
         public string format;
+
+        /// <summary>
+        /// 'single' (one topic, Think Fast) or 'stream' (a series of items).
+        ///
+        /// §14 — Think Fast has ONE topic for the whole challenge, revealed
+        /// when it starts, so there is no NEXT ITEM for the Host to press.
+        /// </summary>
+        public string itemMode;
+
         public string progress;
         public string challengeId;
 
@@ -217,6 +226,9 @@ namespace BrainsAndBacchanal.Protocol
         public bool IsResolved => progress == Round3Progress.Resolved;
         public bool IsInProgress => progress == Round3Progress.InProgress;
         public bool IsElimination => format == Round3Formats.Elimination;
+
+        /// <summary>Whether the Host advances items with NEXT. False for Think Fast.</summary>
+        public bool UsesItemStream => itemMode == "stream";
         public bool IsPoints => format == Round3Formats.Points;
 
         /// <summary>This team's challenge points, or 0.</summary>

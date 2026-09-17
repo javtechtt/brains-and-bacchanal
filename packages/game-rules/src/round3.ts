@@ -271,6 +271,18 @@ export class Round3 {
       return err(rejection('WRONG_STATE', 'No Round 3 challenge is running.'));
     }
 
+    // §14 — Think Fast is ONE topic for the whole challenge. Revealing a second
+    // would replace the topic teams are mid-way through answering, and would
+    // burn a pack item for nothing. A stream challenge (§15-§17) advances
+    // freely.
+    if (slot.definition.itemMode === 'single' && slot.currentItem !== null) {
+      return err(
+        rejection('ILLEGAL_ACTION', 'This challenge has one topic for the whole challenge.', {
+          challengeType: slot.definition.challengeType,
+        }),
+      );
+    }
+
     slot.itemsRevealed += 1;
     slot.currentItem = item;
     slot.currentItemAt = this.#now();
@@ -763,6 +775,7 @@ export class Round3 {
       displayName: slot.definition.displayName,
       order: slot.definition.order,
       format: slot.definition.format,
+      itemMode: slot.definition.itemMode,
       progress: slot.progress,
       challengeId: slot.challengeId,
       scores,

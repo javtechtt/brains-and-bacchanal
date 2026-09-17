@@ -1978,6 +1978,19 @@ export class GameEngine {
   }
 
   /**
+   * Whether the running Round 3 challenge still needs its opening item.
+   *
+   * True for a `single` challenge (Think Fast) that has not revealed its topic
+   * yet. The room uses this to reveal it automatically when the challenge
+   * starts, because §14 has no "next item" for the Host to press.
+   */
+  round3NeedsOpeningItem(): boolean {
+    const current = this.#round3?.view().current;
+    if (current === undefined || current === null) return false;
+    return current.itemMode === 'single' && current.currentItem === null;
+  }
+
+  /**
    * Reveal the next content item.
    *
    * THE ITEM COMES FROM THE CALLER — §13, the game supplies challenge content.

@@ -583,7 +583,7 @@ export class Room {
       case GAME_INTENTS.HOST_PREPARE_CHALLENGE:
         return this.#prepareChallenge(connectionId, intent);
       case GAME_INTENTS.HOST_START_CHALLENGE:
-        return this.#engineAction(connectionId, intent, () => this.#game.startChallenge());
+        return this.#startChallenge(connectionId, intent);
       case GAME_INTENTS.HOST_SET_TURN:
         return this.#setTurn(connectionId, intent);
       case GAME_INTENTS.HOST_SET_ACTIVE_PLAYERS:
@@ -1992,6 +1992,50 @@ export class Room {
   // point, judging an answer, revealing an item, confirming a winner — is
   // subjective Host authority (§14-§17), so a phone has no route to it.
   // -------------------------------------------------------------------------
+
+  /**
+   * Start the prepared challenge.
+   *
+   * Wraps the generic engine action so a Round 3 challenge with ONE topic
+   * (Think Fast, §14) gets that topic revealed automatically. There is no
+   * "next item" in Think Fast for the Host to press, so leaving it to a Host
+   * intent left the challenge unplayable — the bug this method exists to fix.
+   *
+   * Every other challenge is unaffected: a stream challenge reveals nothing
+   * here and the Host advances with NEXT ITEM as before.
+   */
+  #startChallenge(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const started = this.#engineAction(connectionId, intent, () =>
+      this.#game.startChallenge(),
+    );
+    if (!started.ack.ok) return started;
+
+    if (!this.#game.round3NeedsOpeningItem()) return started;
+
+    const current = this.#game.round3?.view().current;
+    if (current === undefined || current === null) return started;
+
+    const item = this.#content.nextItem(current.challengeType);
+    if (item === null) return started;
+
+    const revealed = this.#game.revealRound3Item(item);
+    if (!revealed.ok) return started;
+
+    // Appended as its own event, so a client can order "the challenge started"
+    // against "the topic appeared" rather than inferring one from the other.
+    const event = this.#log.append(
+      revealed.value.type,
+      { kind: 'host', sessionId: '' as never },
+      revealed.value.payload,
+    );
+
+    return {
+      ack: ok({ seq: event.seq }),
+      broadcast: [...started.broadcast, event],
+      direct: started.direct,
+      closeConnections: started.closeConnections,
+    };
+  }
 
   /**
    * Reveal the next Round 3 content item.

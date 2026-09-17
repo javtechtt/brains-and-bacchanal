@@ -223,6 +223,15 @@ namespace BrainsAndBacchanal
                 GUILayout.Label("No item revealed yet.");
             }
 
+            // §14 — Think Fast has ONE topic, revealed automatically when the
+            // challenge starts. Offering NEXT there would replace the topic
+            // teams are mid-way through answering, and the server refuses it.
+            if (!current.UsesItemStream)
+            {
+                GUILayout.Label("One topic for the whole challenge.");
+                return;
+            }
+
             GUI.enabled = !_busy && !session.paused && session.phase == "ACTIVE_PLAY";
             // NO TEXT FIELD. §13 — the game supplies the content; this asks the
             // server for the next item rather than letting the Host invent one.

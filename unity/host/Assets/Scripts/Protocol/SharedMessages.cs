@@ -22,6 +22,15 @@ namespace BrainsAndBacchanal.Protocol
     {
         // Host-gated.
         public const string DealBacchanalCards = "HOST_DEAL_BACCHANAL_CARDS";
+
+        /// <summary>
+        /// DEVELOPMENT ONLY — discard every hand and deal again. Refused unless
+        /// the server runs with development tools enabled. See
+        /// GameEngine.devRedealBacchanalCards on the server for why this exists
+        /// beside, not inside, the real one-time deal.
+        /// </summary>
+        public const string DevRedealBacchanalCards = "DEV_REDEAL_BACCHANAL_CARDS";
+
         public const string OpenCardWindow = "HOST_OPEN_CARD_WINDOW";
         public const string CloseCardWindow = "HOST_CLOSE_CARD_WINDOW";
         public const string OpenMarket = "HOST_OPEN_MARKET";

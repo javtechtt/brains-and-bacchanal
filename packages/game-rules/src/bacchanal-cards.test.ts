@@ -160,6 +160,63 @@ describe('the starting hand', () => {
     expect(second.ok).toBe(false);
   });
 
+  describe('devRedeal — a distinct escape hatch, not a weakening of deal()', () => {
+    it('replaces every hand', () => {
+      const cards = makeCards();
+      cards.deal([TEAM_A, TEAM_B]);
+      const before = cards.handOf(TEAM_A).map((c) => c.cardInstanceId);
+
+      const redealt = cards.devRedeal([TEAM_A, TEAM_B]);
+      expect(redealt.ok).toBe(true);
+
+      const after = cards.handOf(TEAM_A).map((c) => c.cardInstanceId);
+      expect(after).toHaveLength(3);
+      expect(after).not.toEqual(before);
+    });
+
+    it('still gives one card per category after a redeal', () => {
+      const cards = makeCards();
+      cards.deal([TEAM_A]);
+      cards.devRedeal([TEAM_A]);
+
+      const categories = cards.handOf(TEAM_A).map((c) => c.category).sort();
+      expect(categories).toEqual(['DISRUPTION', 'POWER', 'RECOVERY']);
+    });
+
+    it('leaves the ordinary deal() one-time refusal untouched', () => {
+      // The real rule this file exists to protect: a game deals starting hands
+      // exactly once. devRedeal is a distinct method — it must not be reachable
+      // by calling deal() again after a redeal.
+      const cards = makeCards();
+      cards.deal([TEAM_A]);
+      cards.devRedeal([TEAM_A]);
+
+      const secondOrdinaryDeal = cards.deal([TEAM_A]);
+      expect(secondOrdinaryDeal.ok).toBe(false);
+    });
+
+    it('clears the card window and any per-challenge bar', () => {
+      const cards = makeCards();
+      cards.deal([TEAM_A, TEAM_B]);
+      cards.openWindow(CHALLENGE, 'ROUND1_TRIVIA');
+      const first = cards.eligibleCardsFor(TEAM_A, false)[0]!;
+      cards.play({ teamId: TEAM_A, cardInstanceId: first.cardInstanceId, targetTeamId: TEAM_B, paused: false });
+
+      cards.devRedeal([TEAM_A, TEAM_B]);
+
+      expect(cards.windowView().open).toBe(false);
+      expect(cards.windowView().teamsWhoPlayed).toHaveLength(0);
+    });
+
+    it('can be called repeatedly, unlike deal()', () => {
+      const cards = makeCards();
+      cards.deal([TEAM_A]);
+      expect(cards.devRedeal([TEAM_A]).ok).toBe(true);
+      expect(cards.devRedeal([TEAM_A]).ok).toBe(true);
+      expect(cards.devRedeal([TEAM_A]).ok).toBe(true);
+    });
+  });
+
   it('assigns the correct category to every card type', () => {
     // §2 — the mapping the Clash triangle is defined over.
     expect(categoryOf('STEUPS')).toBe('DISRUPTION');

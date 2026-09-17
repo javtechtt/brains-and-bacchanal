@@ -1084,6 +1084,38 @@ export class GameEngine {
   }
 
   /**
+   * DEVELOPMENT ONLY — discard every hand and deal again.
+   *
+   * Gated by the caller (room.ts) behind the same `devTools` flag as
+   * DEV_ADJUST_BB, and refused outright when it is off — a production
+   * deployment cannot accept this whatever a client sends. Exists beside
+   * `dealBacchanalCards`, not inside it: the real deal still refuses a second
+   * call, because a game deals starting hands exactly once. This is a distinct
+   * escape hatch for exercising the Clash without recreating the whole room
+   * until a random deal happens to give both teams a playable card.
+   */
+  devRedealBacchanalCards(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+    if (!this.#options.devTools) {
+      return err(rejection('ILLEGAL_ACTION', 'Development controls are disabled on this server.'));
+    }
+
+    const teamIds = [...this.#teams.keys()].map((id) => asTeamId(id));
+    const dealt = this.#shared.cards.devRedeal(teamIds);
+    if (!dealt.ok) return err(dealt.error);
+
+    return ok({
+      type: 'BACCHANAL_CARDS_DEALT',
+      payload: {
+        teamCardCounts: Object.fromEntries(
+          Object.entries(dealt.value).map(([teamId, cards]) => [teamId, cards.length]),
+        ),
+      },
+    });
+  }
+
+  /**
    * Open the card-play window for the current challenge.
    *
    * `challengeKind` maps the challenge onto a row of the locked compatibility

@@ -161,6 +161,41 @@ export class BacchanalCards {
     return ok(result);
   }
 
+  /**
+   * DEVELOPMENT ONLY — re-deal every hand, discarding whatever was there.
+   *
+   * `deal()` refuses a second call outright, and that refusal is the real rule:
+   * a game deals starting hands exactly once. This exists beside it, not inside
+   * it, so a real deal's one-time guarantee is never weakened to make testing
+   * convenient.
+   *
+   * Why it needs to exist at all: a team's hand is one random card per category
+   * (§2), so whether a team holds anything eligible for a given challenge kind
+   * depends on which specific card each category's roll produced — for a
+   * three-card table like THINK_FAST (Steups, Double It, Forgive Meh), a team
+   * has no playable card unless at least one of its three cards happens to be
+   * one of those three. Testing the Clash — which needs BOTH teams to hold a
+   * playable card at once — can otherwise mean recreating the whole room
+   * repeatedly until the random deal cooperates.
+   *
+   * Server-gated behind devTools exactly like DEV_ADJUST_BB, by the caller in
+   * room.ts. No production path calls this, and no round may either — the
+   * locked one-deal rule has to keep meaning what it says.
+   */
+  devRedeal(teamIds: readonly TeamId[]): Result<Readonly<Record<string, readonly BacchanalCardInstance[]>>> {
+    if (teamIds.length === 0) {
+      return err(rejection('ILLEGAL_ACTION', 'No teams to deal to.'));
+    }
+
+    this.#teams.clear();
+    this.#dealt = false;
+    // endChallenge() clears the card window and any per-challenge bar, since a
+    // fresh hand invalidates whatever those referred to.
+    this.endChallenge();
+
+    return this.deal(teamIds);
+  }
+
   // -------------------------------------------------------------------------
   // Reads
   // -------------------------------------------------------------------------

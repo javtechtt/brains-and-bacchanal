@@ -539,6 +539,8 @@ export class Room {
       // deals and wager resolution.
       case SHARED_INTENTS.HOST_DEAL_BACCHANAL_CARDS:
         return this.#engineAction(connectionId, intent, () => this.#game.dealBacchanalCards());
+      case SHARED_INTENTS.DEV_REDEAL_BACCHANAL_CARDS:
+        return this.#engineAction(connectionId, intent, () => this.#game.devRedealBacchanalCards());
       case SHARED_INTENTS.HOST_OPEN_CARD_WINDOW:
         return this.#openCardWindow(connectionId, intent);
       case SHARED_INTENTS.HOST_CLOSE_CARD_WINDOW:

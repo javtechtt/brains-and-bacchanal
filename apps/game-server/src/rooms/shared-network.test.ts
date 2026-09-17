@@ -236,6 +236,59 @@ describe('dealing Bacchanal cards over a real socket', () => {
   });
 });
 
+describe('DEV_REDEAL_BACCHANAL_CARDS over a real socket', () => {
+  it('discards the old hand and deals a new one, without disturbing the one-deal rule', async () => {
+    // A dev-only escape hatch for exercising the Clash: since each team gets
+    // one random card per category (§2), a real deal can legitimately leave
+    // neither team holding anything playable for a given challenge kind — this
+    // lets a test keep re-rolling instead of recreating the whole room.
+    const party = await makeGame();
+    try {
+      await party.host.submit(SHARED_INTENTS.HOST_DEAL_BACCHANAL_CARDS, {});
+      const before = await playerSnapshot(party.p1);
+      const beforeIds = before.shared?.yourHand.map((c) => c.cardInstanceId).sort();
+
+      const redealt = await party.host.submit(SHARED_INTENTS.DEV_REDEAL_BACCHANAL_CARDS, {});
+      expect(redealt.ok).toBe(true);
+
+      const after = await playerSnapshot(party.p1);
+      const afterIds = after.shared?.yourHand.map((c) => c.cardInstanceId).sort();
+      expect(afterIds).toHaveLength(3);
+      expect(afterIds).not.toEqual(beforeIds);
+
+      // Still one card per category — the redeal uses the same locked rule.
+      const categories = after.shared?.yourHand.map((c) => c.category).sort();
+      expect(categories).toEqual(['DISRUPTION', 'POWER', 'RECOVERY']);
+
+      // The ordinary, real deal still refuses a second call — the dev path is
+      // a distinct escape hatch, not a weakening of the one-deal rule.
+      const ordinaryRedeal = await party.host.submit(
+        SHARED_INTENTS.HOST_DEAL_BACCHANAL_CARDS,
+        {},
+      );
+      expect(ordinaryRedeal.ok).toBe(false);
+
+      // But the dev path itself may be used again.
+      const redealtAgain = await party.host.submit(SHARED_INTENTS.DEV_REDEAL_BACCHANAL_CARDS, {});
+      expect(redealtAgain.ok).toBe(true);
+    } finally {
+      await closeParty(party);
+    }
+  });
+
+  it('is Host-only', async () => {
+    const party = await makeGame();
+    try {
+      await party.host.submit(SHARED_INTENTS.HOST_DEAL_BACCHANAL_CARDS, {});
+
+      const byPlayer = await party.p1.submit(SHARED_INTENTS.DEV_REDEAL_BACCHANAL_CARDS, {});
+      expect(byPlayer.ok).toBe(false);
+    } finally {
+      await closeParty(party);
+    }
+  });
+});
+
 describe('card play authority over a real socket', () => {
   it('refuses a card played by the wrong team', async () => {
     // A phone cannot play another team's card by naming it: the acting team is

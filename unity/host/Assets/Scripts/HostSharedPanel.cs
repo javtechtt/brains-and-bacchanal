@@ -89,7 +89,7 @@ namespace BrainsAndBacchanal
 
             DrawCardStatus(shared);
             GUILayout.Space(6);
-            DrawCardControls(shared);
+            DrawCardControls(shared, game.devToolsEnabled);
             GUILayout.Space(8);
             DrawClashStatus(shared);
             GUILayout.Space(8);
@@ -127,7 +127,7 @@ namespace BrainsAndBacchanal
             }
         }
 
-        private void DrawCardControls(HostSharedView shared)
+        private void DrawCardControls(HostSharedView shared, bool devToolsEnabled)
         {
             GUILayout.Label("BACCHANAL", SubHeaderStyle);
 
@@ -135,6 +135,24 @@ namespace BrainsAndBacchanal
             if (GUILayout.Button("DEAL STARTING HANDS"))
             {
                 _ = SubmitGameIntentAsync(SharedIntents.DealBacchanalCards, "{}");
+            }
+
+            // DEV ONLY. A real deal happens exactly once (GAME_RULES_LOCKED.md
+            // §2); this exists so testing the Clash does not mean recreating the
+            // whole room until a random deal happens to leave both teams holding
+            // something playable for the challenge kind under test. The server
+            // refuses this outright when devTools is off, same as the BB
+            // controls in the engine panel — hidden here for the same reason
+            // those are: no point offering a button that only bounces.
+            if (devToolsEnabled)
+            {
+                var previousColor = GUI.color;
+                GUI.color = Color.yellow;
+                if (GUILayout.Button("[DEV] RE-DEAL STARTING HANDS"))
+                {
+                    _ = SubmitGameIntentAsync(SharedIntents.DevRedealBacchanalCards, "{}");
+                }
+                GUI.color = previousColor;
             }
 
             GUILayout.Label($"Open window as: {_devChallengeKind}");

@@ -61,6 +61,16 @@ export const SHARED_INTENTS = {
   /** Host deals every team its locked starting hand. GAME_RULES_LOCKED.md §2. */
   HOST_DEAL_BACCHANAL_CARDS: 'HOST_DEAL_BACCHANAL_CARDS',
   /**
+   * DEVELOPMENT ONLY — discard every hand and deal again.
+   *
+   * The real deal happens exactly once per game (§2); this exists beside it so
+   * a Clash can be exercised without recreating the whole room until a random
+   * deal happens to give both teams a playable card for the challenge kind
+   * under test. Refused outright unless the server runs with development tools
+   * enabled — same gate as `DEV_ADJUST_BB` — and no round may call it.
+   */
+  DEV_REDEAL_BACCHANAL_CARDS: 'DEV_REDEAL_BACCHANAL_CARDS',
+  /**
    * Host opens the window in which cards may be played into this challenge,
    * declaring which locked-table challenge kind it counts as.
    */

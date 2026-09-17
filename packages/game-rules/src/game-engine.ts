@@ -918,7 +918,7 @@ export class GameEngine {
   /**
    * Pause the game.
    *
-   * GAME_RULES_LOCKED.md §20 / D-011. The running timer freezes with its
+   * GAME_RULES_LOCKED.md §22 / D-011. The running timer freezes with its
    * remaining time intact, the interrupted phase is captured so a resume
    * returns exactly there, and nothing else about the challenge is disturbed.
    *
@@ -1560,7 +1560,7 @@ export class GameEngine {
   /**
    * Guard a gameplay action that must not proceed while paused.
    *
-   * GAME_RULES_LOCKED.md §20 — when the game pauses, gameplay stops. The
+   * GAME_RULES_LOCKED.md §22 — when the game pauses, gameplay stops. The
    * transition table already refuses an ordinary `advance` out of PAUSED, but
    * several engine actions change state WITHOUT a phase transition: resolving a
    * challenge moves BB, a ruling is recorded, a turn is reassigned. Those would

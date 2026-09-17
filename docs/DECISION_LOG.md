@@ -9,25 +9,30 @@ Family Feud is the first main buzzer section.
 
 Sudden Death may also use a buzzer.
 
-## D-002 — Round 1 Uses Different Questions
-Teams take turns answering different questions.
+## D-002 — Round 1 Uses Different Questions — ⚠ SUPERSEDED BY D-030
+~~Teams take turns answering different questions.~~
 
-No buzzer.
+**No longer true.** D-030 resolved Round 1: every team answers the **same**
+question simultaneously, 15 questions total, 60 seconds each. The turn-based,
+different-questions format is gone, and with it the legality of Gimme Dat! and
+Doh Know in Round 1.
 
-Exact total allocation remains open.
+What survives from this entry: **no buzzer** (still true, and still D-001).
 
 ## D-003 — Round 2 Physical Rules Stay Outside the App
 Host runs Bottle Battle, Match Makers, Grabbers and Bombers physically.
 
 Software only needs Host winner selection and configured 500 BB award.
 
-## D-004 — Think Fast Is Turn-Based
+## D-004 — Think Fast Is Turn-Based — ⚠ AMENDED BY D-031
 - no buzzer,
 - teams alternate,
-- two-team order via rock-paper-scissors,
+- ~~two-team order via rock-paper-scissors~~ → **order comes from the previous
+  round's standings** (D-031),
 - Host validates,
 - no BB per answer,
-- last team able to provide valid answer wins 500 BB.
+- last team able to provide valid answer wins 500 BB (**unchanged**), and now
+  also gains +1 Round 3 challenge-win counter.
 
 ## D-005 — Guess the Logo Is Spoken
 - 10-second window per logo,
@@ -46,7 +51,10 @@ Maximum one retry on a question.
 ## D-007 — Bacchanal Compatibility Table Approved
 Use the table in `GAME_RULES_LOCKED.md`.
 
-Maco! currently has no legal challenge and remains unresolved.
+~~Maco! currently has no legal challenge and remains unresolved.~~ **Resolved by
+D-030: Maco! is legal in Round 1 trivia, and only there.** The Round 1 row also
+loses Gimme Dat! and Doh Know, which need an individually assigned question that
+Round 1 no longer has.
 
 ## D-008 — Three-Team Round 4
 - 2nd vs 3rd first,
@@ -299,3 +307,128 @@ team.
 This is a genuine rule change, not a bug fix — recorded here rather than
 silently edited into the locked doc, per the same discipline every other locked
 rule gets.
+
+## D-030 — Round 1 Format, Scoring and Card Compatibility Resolved
+The project owner resolved Round 1, closing `OPEN_RULES.md` §1 and §7.
+
+**Format.** 15 questions total — 5 Easy, 5 Medium, 5 Hard. **Every team answers
+the same question simultaneously**, 60 seconds each, still no buzzer. Each team
+nominates one player per difficulty, and only that nominated player submits.
+The correct answer is revealed after the question/retry flow completes.
+
+This **supersedes** the previous locked wording ("teams take turns", "teams
+answer different questions") and D-002. It is a genuine rule change, recorded
+here rather than silently edited into the locked doc — the same discipline
+D-029 got.
+
+**Scoring changed.** Easy 100 → **20**, Medium 200 → **30**, Hard 300 → **50**.
+A wrong answer scores 0 with no deduction. The value is awarded as BB *and*
+counted again as a separate Round 1 point total that decides the Round 1 winner.
+Two totals, one correct answer — not two BB transactions.
+
+**Maco! is now legal, in Round 1 only.** This closes the deferral standing since
+Phase 4. The simultaneous-answer format is what makes the card meaningful: there
+is a submitted opponent answer to look at. The target must already have
+submitted, a half-typed answer is never exposed, and viewing neither copies nor
+submits.
+
+**Gimme Dat! and Doh Know are no longer legal in Round 1.** Both operate on an
+individually assigned question, and Round 1 no longer assigns one. Removing them
+follows from the format change rather than being a separate decision.
+
+Round 1's compatibility row therefore becomes: Maco!, Double It!, ALLYUH HELP
+ME!, FORGIVE MEH!
+
+**Double It! doubles both totals** on a correct answer — 20→40, 30→60, 50→100.
+Wrong remains 0, and multipliers still never stack.
+
+**ALLYUH HELP ME!** relies on the assisting team's submitted answer; if correct,
+both teams receive the question's normal BB and Round 1 score.
+
+Still open, narrowly: the FORGIVE MEH! retry-window duration
+(`OPEN_RULES.md` §13).
+
+**Nothing is implemented.** This is documentation only; Round 1 remains
+unbuilt, and `CARD_ELIGIBILITY` still has no MACO entry. The Phase 6 test
+asserting Maco is unplayable will fail when that entry is added — by design,
+as the signal to update it.
+
+## D-031 — Round 3 Resolved; Think Fast Order Comes from Standings
+The project owner resolved Round 3, closing `OPEN_RULES.md` §3, §4, §5 and §6.
+
+### Round 3 keeps its BB, and adds a counter
+
+Two things are now counted, and they are **not** the same:
+
+- **BB**, exactly where the locked rules already put it — Think Fast 500 BB
+  (§14) and Sing a Song 500 BB (§17). Guess the Logo and All Answers Begin With
+  award none, as before.
+- **A Round 3 challenge-win counter**, +1 per challenge won, which decides the
+  **Round 3 winner**.
+
+Winning Round 3 overall awards **no BB**. No locked rule grants one, so none is
+invented.
+
+A challenge's internal score (logos guessed, prompts answered) is a third,
+temporary thing that decides only who won that challenge. Five logos is one
+Round 3 win, not five, and not BB.
+
+### Host discretion over the challenge end
+
+Guess the Logo and All Answers Begin With have a normal target of **5**; Sing a
+Song **3**. Reaching the target signals the challenge is normally over, but the
+**Host confirms the winner** and may confirm earlier or let play continue.
+
+A challenge is never resolved by a score alone. This is deliberate: these are
+spoken, Host-judged challenges at a party, and the Host is already the authority
+on who answered first and whether an answer counts.
+
+### Think Fast order — supersedes the locked rule
+
+`GAME_RULES_LOCKED.md` §13 previously locked *"two-team game uses
+rock-paper-scissors to choose first and second."* **That is replaced.**
+
+Turn order now comes from the **previous round's standings**: the team that won
+the previous round goes first, then the others in placement order. Two and three
+teams alike, which also closes the three-team question §3 left open.
+
+**Winning a round means having the most total BB when it ends.** Round 2 records
+per-challenge winners but no placement, and rather than add one, the owner chose
+the measure the game already has. BB is the score (§1), so the leader on BB is
+the leader.
+
+Accepted consequence, recorded so it is not mistaken for a bug: total BB
+includes Market spending and Maco Mail outcomes, so a team can lead entering
+Round 3 without having won a physical challenge. That is a real outcome of BB
+being both currency and score, not an ordering fault.
+
+Rock-paper-scissors is **no longer** used for Think Fast order. It survives only
+as the Round 3 overall tiebreaker (§18), where it is an actual game of
+rock-paper-scissors and **not** a Bacchanal Clash — no card is involved or spent.
+
+### Double It is unchanged
+
+It doubles a challenge's BB reward, one per challenge, exactly as §3 has always
+said. An earlier proposal to defer it to a round-end bonus was dropped along
+with the Round 2 redesign it belonged to; Round 2 stays as shipped, and Round 3
+keeps its BB, so the card needs no new semantics.
+
+Where a Round 3 challenge awards no BB (Guess the Logo, All Answers Begin With),
+Double It has nothing to double. It remains legal there per the approved table,
+and doubling simply has no effect — it is **not** given a counter meaning, since
+no rule defines one.
+
+### Content comes from the game, not the Host
+
+For Rounds 1, 3 and 4 the game supplies challenge content — the Think Fast
+topic, the logos, the letter and prompts, the Sing a Song items — from its
+content source. The Host controls progression and judgment; the Host does not
+invent challenge content during play. See `CONTENT_POLICY.md`.
+
+### Still open
+
+- the Think Fast answer timer, and what a timeout means (`OPEN_RULES.md` §2),
+- Round 2 is **unchanged**: 500 BB per challenge, no counter, no round bonus.
+
+**Nothing is implemented.** Round 3 is not built; this is the locked-rule
+reconciliation that precedes building it.

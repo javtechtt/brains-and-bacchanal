@@ -5,7 +5,7 @@ import type { Clock, Millis } from './clock.js';
  *
  * ARCHITECTURE.md §6 — the server owns "open times, deadlines, paused time,
  * resume deadlines, buzzer acceptance".
- * GAME_RULES_LOCKED.md §20 / DECISION_LOG.md D-011 — when the game pauses,
+ * GAME_RULES_LOCKED.md §22 / DECISION_LOG.md D-011 — when the game pauses,
  * "active gameplay timers pause".
  *
  * Paused time is not cosmetic. If a player disconnects with four seconds left,

@@ -274,17 +274,20 @@ defined except the Clash's locked 3 seconds.
 
 The generic wager is a primitive with **no Family Feud board**, deliberately.
 
-### Standing note on Maco! (OPEN_RULES.md §7)
+### Standing note on Maco! (OPEN_RULES.md §7) — NOW RESOLVED
 
-The owner's current instruction: **leave Maco! out for now; if it is never
-resolved, it does not go in the deck.** This is a decision to DEFER, not a rule.
-Do not implement Maco! eligibility, and do not quietly give it a legal challenge.
+**D-030: Maco! is legal in Round 1 trivia, and only there.** The deferral that
+stood since Phase 4 is closed.
 
-**As built in Phase 6:** the card type exists and *is* dealt in starting hands
-(the spec forbade removing it), but it appears in no row of the eligibility
-table, so it can never legally be played. `CARDS_WITHOUT_LEGAL_CHALLENGE`
-derives to `['MACO']` rather than being written down — resolving §7 by adding it
-to the table empties that list automatically. A test asserts it stays unplayable.
+**The code has not caught up, deliberately.** `CARD_ELIGIBILITY.ROUND1_TRIVIA`
+still has no MACO entry, because Round 1 is not implemented and Phase 7B is
+Round 3. When Round 1 is built:
+
+- add `MACO` to that row — `CARDS_WITHOUT_LEGAL_CHALLENGE` empties itself,
+- the Phase 6 test asserting Maco is unplayable **will fail**. That failure is
+  the signal to update it, not a regression.
+
+Until then the card is still dealt and still unplayable, exactly as before.
 
 ### Standing note on Partner, I Sorry (OPEN_RULES.md §12)
 

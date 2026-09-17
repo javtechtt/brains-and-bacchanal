@@ -329,7 +329,7 @@ describe('answering a deal', () => {
 
 describe('the generic wager', () => {
   it('caps a wager at 50% of current BB', () => {
-    // GAME_RULES_LOCKED.md §17 — "up to 50% of current BB".
+    // GAME_RULES_LOCKED.md §19 — "up to 50% of current BB".
     expect(MAX_WAGER_FRACTION).toBe(0.5);
     expect(maxWagerFor(1_000)).toBe(500);
     expect(maxWagerFor(999)).toBe(499); // floored, never over the ceiling

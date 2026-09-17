@@ -77,7 +77,7 @@ describe('illegal transitions', () => {
   });
 });
 
-// GAME_RULES_LOCKED.md §20, DECISION_LOG.md D-011
+// GAME_RULES_LOCKED.md §22, DECISION_LOG.md D-011
 describe('pause', () => {
   it('records the phase to return to', () => {
     const outcome = applyTransition(
@@ -123,7 +123,7 @@ describe('pause', () => {
   });
 });
 
-// "only the Host can resume" — GAME_RULES_LOCKED.md §20
+// "only the Host can resume" — GAME_RULES_LOCKED.md §22
 describe('resume authority', () => {
   const paused: PhaseState = {
     phase: 'PAUSED',

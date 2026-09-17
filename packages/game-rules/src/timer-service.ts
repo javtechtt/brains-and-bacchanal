@@ -23,7 +23,7 @@ import {
  *
  * Built on the Phase 2 `Deadline` primitives rather than beside them, so paused
  * time is excluded from elapsed time by the same code the deadline tests
- * already cover. GAME_RULES_LOCKED.md §20: a player who disconnects with four
+ * already cover. GAME_RULES_LOCKED.md §22: a player who disconnects with four
  * seconds left still has four seconds when the Host resumes.
  *
  * NO DURATION IS DECIDED HERE. Think Fast's timer (OPEN_RULES.md §2), Sing a

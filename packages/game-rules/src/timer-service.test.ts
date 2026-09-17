@@ -102,7 +102,7 @@ describe('TimerService pause and resume', () => {
     timer.pause();
     expect(timer.remainingMs()).toBe(20_000);
 
-    // GAME_RULES_LOCKED.md §20 — a long pause must not consume the deadline.
+    // GAME_RULES_LOCKED.md §22 — a long pause must not consume the deadline.
     clock.advance(600_000);
     expect(timer.remainingMs()).toBe(20_000);
   });

@@ -592,7 +592,7 @@ Weigh:
 | Criterion | Why it matters here |
 |---|---|
 | Ordering reliability | Sequence numbers are the authority; a transport must not reorder or duplicate |
-| Reconnect reliability | Phones sleep, wander and drop; `GAME_RULES_LOCKED.md` §20 makes reconnect a first-class concern |
+| Reconnect reliability | Phones sleep, wander and drop; `GAME_RULES_LOCKED.md` §22 makes reconnect a first-class concern |
 | **Unity integration** | The Host display is Unity; a transport Unity cannot use reliably is disqualifying |
 | Implementation complexity | The raw adapter hand-rolls request/response; that cost recurs in every client |
 | Debugging | Plain frames are readable in devtools; Socket.IO's Engine.IO framing is not |

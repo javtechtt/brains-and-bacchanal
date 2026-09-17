@@ -134,7 +134,7 @@ Actions are `advance`, `pause` and `resume`.
 
 ## Pause
 
-`GAME_RULES_LOCKED.md` §20 and `DECISION_LOG.md` D-011:
+`GAME_RULES_LOCKED.md` §22 and `DECISION_LOG.md` D-011:
 
 - an active player disconnecting pauses gameplay automatically,
 - active gameplay timers pause,
@@ -285,17 +285,19 @@ already legal and Round 3 will use it, but nothing in Phase 7A takes it.
 
 Phase 2 does **not** decide, and must not be read as deciding:
 
-- how many questions Round 1 has, or how they are allocated (`OPEN_RULES.md` §1)
-- the Think Fast answer timer (§2) or three-team starting order (§3)
-- Guess the Logo scoring (§4)
-- the All Answers Begin With format (§5)
-- Sing a Song timings (§6)
-- where `Maco!` may be played (§7)
+- the Think Fast answer timer (`OPEN_RULES.md` §2), and what a timeout means
+  there
 - Family Feud Steups board behaviour (§8)
 - FORGIVE MEH! and strike ordering (§9)
 - three-team Family Feud card eligibility (§10)
 - Round 4 / Sudden Death timers (§11)
 - `Partner, I Sorry` with insufficient BB (§12)
+- the Round 1 FORGIVE MEH! retry window (§13)
+
+Resolved since this document was written, and no longer undefined: Round 1's
+allocation and Maco!'s eligibility (D-030), and Round 3's scoring, targets,
+Think Fast order and tiebreaker (D-031). None of them are implemented — the
+engine stays generic regardless.
 
 Also deferred by phase, not by open rule: rounds and the buzzer. (The BB ledger
 arrived in Phase 5; Bacchanal Cards, the Clash, the Market, Maco Mail, Host Deals

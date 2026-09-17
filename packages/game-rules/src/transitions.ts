@@ -64,7 +64,7 @@ export function applyTransition(
 }
 
 function advance(state: PhaseState, to: GamePhase): TransitionOutcome {
-  // GAME_RULES_LOCKED.md §20 — while paused, gameplay does not continue. An
+  // GAME_RULES_LOCKED.md §22 — while paused, gameplay does not continue. An
   // ordinary advance must not slip past a pause; only a Host resume leaves it.
   if (state.phase === 'PAUSED') {
     return fail(
@@ -112,7 +112,7 @@ function pause(state: PhaseState, reason: PauseReason): TransitionOutcome {
 /**
  * Resume from PAUSED.
  *
- * GAME_RULES_LOCKED.md §20 and DECISION_LOG.md D-011:
+ * GAME_RULES_LOCKED.md §22 and DECISION_LOG.md D-011:
  *   - reconnecting does not automatically resume gameplay,
  *   - only the Host can resume,
  *   - the Host may resume with or without the player reconnecting.

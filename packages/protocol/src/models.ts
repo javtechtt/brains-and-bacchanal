@@ -41,7 +41,7 @@ export interface RoomState {
   /**
    * Set when the game is paused, recording where to return to.
    *
-   * GAME_RULES_LOCKED.md §20 / DECISION_LOG.md D-011 — only the Host resumes,
+   * GAME_RULES_LOCKED.md §22 / DECISION_LOG.md D-011 — only the Host resumes,
    * and the game returns to what it was doing.
    */
   readonly pause: PauseState | null;
@@ -94,7 +94,7 @@ export interface PlayerState {
   /**
    * Current session. Replaced on reconnect.
    *
-   * GAME_RULES_LOCKED.md §20 — a reconnecting player "should return to same
+   * GAME_RULES_LOCKED.md §22 — a reconnecting player "should return to same
    * team/game/session where possible", so playerId is stable while sessionId
    * may change. Real tokens and authentication are not Phase 2.
    */

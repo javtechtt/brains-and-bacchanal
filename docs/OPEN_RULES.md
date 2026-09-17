@@ -2,82 +2,104 @@
 
 Claude Code must **not** invent answers to these.
 
-## 1. Round 1 Question Count / Allocation
+## 1. Round 1 Question Count / Allocation — ✅ RESOLVED
 
-Locked:
-- teams take turns,
-- teams receive different questions,
-- no buzzer,
-- Easy / Medium / Hard values are locked.
+**Resolved by the project owner.** 15 questions total (5 Easy, 5 Medium, 5
+Hard), all teams answering the **same** question simultaneously, 60 seconds
+each. Values changed to Easy 20, Medium 30, Hard 50, awarded as BB and counted
+again as separate Round 1 points.
 
-Still unclear:
-- Does "5 Easy, 5 Medium, 5 Hard" mean 15 questions total across the round, 15 per team, or another allocation?
-- When a team gets its own question wrong, does play simply move to the next team's separate question?
+The old "teams take turns / teams receive different questions" wording is gone;
+see `GAME_RULES_LOCKED.md` §11 and `DECISION_LOG.md` D-030.
 
-Do not hard-code final allocation.
+**Still open, and narrowly:** the FORGIVE MEH! retry-window duration in Round 1
+(§13 below).
 
 ## 2. Think Fast — Exact Timer
 
-An 8-second timer was discussed as a suggestion.
+Still open. An 8-second timer was discussed early; 10 seconds has since been
+suggested to match the other three Round 3 challenges.
 
-It is not explicitly locked.
+**Neither is locked**, so nothing implements one. The timer stays
+caller-supplied from configuration, as every undecided duration does.
 
-## 3. Think Fast — Three-Team Starting Order
+Also undecided: what a **timeout means**. No locked rule says running out of
+time is the same as failing to answer, and D-022 is explicit that expiry decides
+nothing on its own. Until that is settled, a Think Fast timeout hands the
+challenge to the Host rather than eliminating anyone automatically.
 
-For two teams, rock-paper-scissors determines first/second.
+## 3. Think Fast — Starting Order — ✅ RESOLVED
 
-For three teams, first/second/third selection is not finalized.
+**Resolved by the project owner: turn order comes from the previous round's
+standings.** The team that won the previous round goes first, then the others in
+placement order. This applies to two and three teams alike.
 
-## 4. Guess the Logo — Scoring
+Rock-paper-scissors is **no longer** used to choose Think Fast order — it is now
+only the Round 3 overall tiebreaker (`GAME_RULES_LOCKED.md` §18).
 
-Locked:
-- 10 seconds per logo,
-- teams shout,
-- Host judges first/correct,
-- wrong first shout does not stop other teams,
-- no correct answer → next logo.
+See `GAME_RULES_LOCKED.md` §14 and `DECISION_LOG.md` D-031.
 
-Still open:
-- number of logos,
-- BB per logo versus 500 BB for whole challenge,
-- how overall winner is determined,
-- whether a team that shouted wrong may try again on the same logo.
+## 4. Guess the Logo — Scoring — ✅ RESOLVED
 
-## 5. All Answers Begin With...
+**Resolved by the project owner.** Each correct logo scores **+1 challenge
+point**, the normal target is **5**, and the **Host confirms the challenge
+winner** — before or after the target. The winner gains +1 Round 3 challenge-win
+counter and **no BB**.
 
-Still open:
-- number of prompts,
-- turn order,
-- answer timer,
-- scoring,
-- tie handling,
-- overall winner condition.
+A team that shouted wrong may keep answering within the same 10-second window;
+that was already locked. The number of logos is not fixed — the challenge runs
+until the Host confirms a winner.
 
-Keep it configurable.
+See `GAME_RULES_LOCKED.md` §15 and `DECISION_LOG.md` D-031.
 
-## 6. Sing a Song — Timing
+## 5. All Answers Begin With... — ✅ RESOLVED
 
-Host judging and 500 BB winner are locked.
+**Resolved by the project owner.** The game supplies the letter and the prompts.
+Each prompt has a **10-second window**; a valid first answer scores **+1
+challenge point**; the normal target is **5**; the **Host confirms the challenge
+winner** before or after it. The winner gains +1 Round 3 challenge-win counter
+and **no BB**.
 
-15 seconds to start and 20 seconds performance were only suggestions.
+The number of prompts is not fixed — play continues until the Host confirms.
+There is no turn order: any team may answer, and the Host judges who was first.
 
-## 7. Maco! Card Compatibility
+See `GAME_RULES_LOCKED.md` §16 and `DECISION_LOG.md` D-031.
 
-Maco! is still a defined Disruption card, but the approved compatibility table gives it no legal challenge.
+## 6. Sing a Song — Timing — ✅ RESOLVED
 
-Before Bacchanal dealing/eligibility is finalized, the project owner must decide:
-- where Maco! can be used,
-- or whether it leaves the starting pool,
-- or whether it is replaced/reworked.
+**Resolved by the project owner.** Each supplied item has a **10-second
+window**. The first team to sing a full matching line scores **+1 challenge
+point**; the normal target is **3**; the **Host confirms the challenge winner**
+before or after it.
 
-Claude must not decide.
+The challenge keeps its locked **500 BB** for the winner, who also gains +1
+Round 3 challenge-win counter.
 
-**Owner instruction (Phase 4): leave it out for now. If it is never resolved, it does not go in the deck.**
+The earlier "15 seconds to start, 20 seconds performance" suggestions are
+dropped.
 
-This DEFERS the question; it does not answer it. When card dealing is built
-(Phase 6), Maco! is simply absent from the starting pool — no eligibility rule
-is invented for it, and it is not quietly given a legal challenge. The rule stays
-open here in case the owner later wants to rework it.
+See `GAME_RULES_LOCKED.md` §17 and `DECISION_LOG.md` D-031.
+
+## 7. Maco! Card Compatibility — ✅ RESOLVED
+
+**Resolved by the project owner: Maco! is legal in Round 1 trivia, and only
+there.**
+
+Round 1's new simultaneous-answer format is what gives the card a meaning —
+there is a submitted opponent answer to look at. The target must already have
+submitted, a half-typed answer is never exposed, and viewing does not copy or
+submit it.
+
+This closes the deferral that had stood since Phase 4. See
+`GAME_RULES_LOCKED.md` §3, §6 and §11, and `DECISION_LOG.md` D-030.
+
+**Implementation note.** Phase 6 built `CARDS_WITHOUT_LEGAL_CHALLENGE` as a
+DERIVED list precisely so this moment would need no hunting: adding MACO to
+`CARD_ELIGIBILITY.ROUND1_TRIVIA` empties it automatically. A Phase 6 test
+asserts Maco is unplayable and **will fail** when that entry is added — that
+failure is the signal to update the test, not a regression.
+
+Nothing is implemented yet; Round 1 is not built.
 
 ## 8. Family Feud — Steups Board Behavior
 
@@ -119,6 +141,21 @@ Still unclear if payer has less than 500:
 - or another rule.
 
 Do not invent.
+
+## 13. Round 1 — FORGIVE MEH! Retry Window
+
+Round 1 is otherwise fully locked (`GAME_RULES_LOCKED.md` §11): 60 seconds per
+question, retry available after a wrong first answer, one retry maximum shared
+with the Market's Second Chance, and the correct answer revealed only after the
+retry flow completes.
+
+**Still open:** how long the nominated player gets for that retry.
+
+- the remainder of the original 60 seconds?
+- a fresh, shorter window?
+- and if a fresh window, how long?
+
+Do not invent one. Keep it configuration-driven.
 
 ## Development Guidance
 

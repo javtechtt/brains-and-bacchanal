@@ -263,7 +263,7 @@ namespace BrainsAndBacchanal
         private async void HostResume()
         {
             // A Host action is an INTENT. The server decides whether it is allowed
-            // (only the Host may resume — GAME_RULES_LOCKED.md §20) and Unity
+            // (only the Host may resume — GAME_RULES_LOCKED.md §22) and Unity
             // renders whatever it decides, including a rejection.
             var ack = await _client.SubmitAsync(BenchmarkIntents.Resume, "{}");
             _lastAck = Describe(ack);

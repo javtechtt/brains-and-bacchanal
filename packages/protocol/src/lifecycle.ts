@@ -37,7 +37,7 @@ export const GAME_PHASES = [
   'ROUND_COMPLETE',
   /** Gameplay suspended. Only a Host-authorised resume leaves this state. */
   'PAUSED',
-  /** GAME_RULES_LOCKED.md §19 — tied leaders play for the win. */
+  /** GAME_RULES_LOCKED.md §21 — tied leaders play for the win. */
   'SUDDEN_DEATH',
   /** Terminal. */
   'GAME_OVER',
@@ -49,7 +49,7 @@ export type GamePhase = (typeof GAME_PHASES)[number];
  * Legal transitions between phases.
  *
  * PAUSED is deliberately absent from these lists. Pausing and resuming are not
- * ordinary transitions: GAME_RULES_LOCKED.md §20 requires that resuming returns
+ * ordinary transitions: GAME_RULES_LOCKED.md §22 requires that resuming returns
  * to where the game left off, which this table cannot express. They are handled
  * separately so the "only the Host resumes" rule has exactly one implementation.
  *
@@ -103,7 +103,7 @@ export function isTerminalPhase(phase: GamePhase): boolean {
 /**
  * Whether gameplay may advance while in this phase.
  *
- * GAME_RULES_LOCKED.md §20 — when paused, "active gameplay timers pause".
+ * GAME_RULES_LOCKED.md §22 — when paused, "active gameplay timers pause".
  */
 export function isPlayableActivePhase(phase: GamePhase): boolean {
   return phase === 'ACTIVE_PLAY' || phase === 'SUDDEN_DEATH';

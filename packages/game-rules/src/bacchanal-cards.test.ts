@@ -61,7 +61,7 @@ describe('the locked compatibility table', () => {
   }
 
   it('bars every card from Sudden Death', () => {
-    // GAME_RULES_LOCKED.md §19 — no Bacchanal Cards in Sudden Death.
+    // GAME_RULES_LOCKED.md §21 — no Bacchanal Cards in Sudden Death.
     for (const cardType of BACCHANAL_CARD_TYPES) {
       expect(isCardEligible(cardType, 'SUDDEN_DEATH')).toBe(false);
     }

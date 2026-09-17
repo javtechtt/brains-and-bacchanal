@@ -614,7 +614,7 @@ Fixed with two separate things, deliberately kept distinct:
 **The interpolation decides nothing.** Every refresh snaps the display back to
 the server's value, so local drift cannot accumulate; the result is floored at 0
 rather than implying an expiry the server has not declared; and a *paused* timer
-is never interpolated at all, because `GAME_RULES_LOCKED.md` §20 requires paused
+is never interpolated at all, because `GAME_RULES_LOCKED.md` §22 requires paused
 time not to consume the remaining time. The panel shows both
 `Timer remaining (ms, displayed)` and `Timer remaining (ms, server)` so the two
 can be compared during testing.

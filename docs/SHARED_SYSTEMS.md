@@ -509,7 +509,7 @@ stops.
 
 ## The generic wager
 
-`GAME_RULES_LOCKED.md` §17 — up to **50% of current BB**, placed before
+`GAME_RULES_LOCKED.md` §19 — up to **50% of current BB**, placed before
 answering. Phase 6 builds the primitive only; it is **not** connected to a Family
 Feud board, and no board exists.
 

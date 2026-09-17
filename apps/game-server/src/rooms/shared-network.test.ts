@@ -781,7 +781,7 @@ describe('Host Deals over a real socket', () => {
 
 describe('wagers over a real socket', () => {
   it('caps at 50%, locks, and resolves exactly once', async () => {
-    // GAME_RULES_LOCKED.md §17, as a reusable primitive. No Family Feud board.
+    // GAME_RULES_LOCKED.md §19, as a reusable primitive. No Family Feud board.
     const party = await makeGame();
     try {
       const tooBig = await party.p1.submit(SHARED_INTENTS.PROPOSE_WAGER, { amount: 501 });

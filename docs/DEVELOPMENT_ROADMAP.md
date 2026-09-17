@@ -139,12 +139,21 @@ resolves at ≥500 BB and is blocked below it (§12).
 
 ## Phase 7 — Rounds ◀ IN PROGRESS
 
-### Round 1
-Wait for final question allocation before hard-coding sequence.
+### Round 1 — rules locked, NOT implemented
 
-**Not started.** `OPEN_RULES.md` §1 is still open. Because of that, Round 2 has a
-development-gated entry (`DEV_START_ROUND2`) rather than a production path —
-inventing a rule that lets a real game skip Round 1 was explicitly refused.
+**The rules are now fully locked** (D-030, `GAME_RULES_LOCKED.md` §11): 15
+questions (5/5/5), all teams answering the same question simultaneously, 60
+seconds each, Easy 20 / Medium 30 / Hard 50 awarded as BB *and* as separate
+Round 1 points. Card compatibility is Maco!, Double It!, ALLYUH HELP ME!,
+FORGIVE MEH!
+
+`OPEN_RULES.md` §1 and §7 are **resolved**. One narrow item remains: the
+FORGIVE MEH! retry-window duration (§13).
+
+**No code exists yet.** Round 2 therefore still has a development-gated entry
+(`DEV_START_ROUND2`) rather than a production path, and `CARD_ELIGIBILITY` still
+has no MACO entry — a Phase 6 test asserts Maco is unplayable and will fail when
+one is added, which is the intended signal.
 
 ### Round 2 ✅ COMPLETE (Phase 7A)
 
@@ -182,14 +191,27 @@ intended Host experience.
 **Nothing in `OPEN_RULES.md` was resolved.** Maco! is still unplayable (§7), and
 Round 1's allocation (§1) is what forced the development entry.
 
-### Round 3
-Implement locked parts:
-- Think Fast,
-- Guess the Logo,
-- configurable All Answers Begin With,
-- Host-judged Sing a Song.
+### Round 3 — rules locked, NOT implemented ◀ NEXT
 
-Do not invent open timers/scoring.
+**The rules are now locked** (D-031, `GAME_RULES_LOCKED.md` §13–§18), closing
+`OPEN_RULES.md` §3, §4, §5 and §6:
+
+- four challenges in order: Think Fast, Guess the Logo, All Answers Begin With,
+  Sing a Song,
+- a **Round 3 challenge-win counter** (+1 per challenge) decides the round;
+  BB stays exactly where the locked rules already put it — Think Fast 500,
+  Sing a Song 500, the other two none,
+- winning Round 3 overall awards **no BB**,
+- targets: 5 logos, 5 prompts, 3 songs — but the **Host confirms** the winner and
+  may end earlier or later,
+- 10-second window per item,
+- **Think Fast order comes from the previous round's standings** (most total BB),
+  no longer rock-paper-scissors,
+- an overall counter tie is broken by **real rock-paper-scissors**, not a Clash,
+- the **game supplies challenge content**; the Host does not invent it.
+
+Still open: the Think Fast answer timer and what a timeout means
+(`OPEN_RULES.md` §2). Keep it configuration-driven.
 
 ### Round 4
 Implement:

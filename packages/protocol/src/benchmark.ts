@@ -141,7 +141,7 @@ export interface BenchmarkTimerStartedPayload {
 /**
  * Why the benchmark session paused.
  *
- * Mirrors GAME_RULES_LOCKED.md §20's PauseReason shape (host_requested vs an
+ * Mirrors GAME_RULES_LOCKED.md §22's PauseReason shape (host_requested vs an
  * active player's connection dropping) at the scale this benchmark needs.
  */
 export type BenchmarkPauseReason = 'host_requested' | 'player_disconnect';

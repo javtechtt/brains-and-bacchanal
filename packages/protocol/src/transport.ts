@@ -110,7 +110,7 @@ export interface RealtimeTransport {
    * Register the handler invoked when a connection closes.
    *
    * The transport reports the raw fact of disconnection only. Whether that
-   * should pause the game is a rule decision (GAME_RULES_LOCKED.md §20) and
+   * should pause the game is a rule decision (GAME_RULES_LOCKED.md §22) and
    * belongs to the server, not here.
    */
   onDisconnect(handler: ConnectionHandler): void;

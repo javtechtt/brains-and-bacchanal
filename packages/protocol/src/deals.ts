@@ -173,7 +173,7 @@ export interface HostDealView {
 /**
  * The maximum fraction of current BB a team may wager.
  *
- * GAME_RULES_LOCKED.md §17 — the stealing team "may wager up to 50% of current
+ * GAME_RULES_LOCKED.md §19 — the stealing team "may wager up to 50% of current
  * BB before answering". Phase 6 builds the reusable primitive; Family Feud is
  * Phase 7 and this is not connected to a board.
  */
@@ -212,7 +212,7 @@ export type WagerStatus = (typeof WAGER_STATUSES)[number];
  * the wager stands at the amount that was legal when it was made. Re-checking
  * at resolution would let an unrelated event silently void a locked bet.
  *
- * GAME_RULES_LOCKED.md §17 says the wager happens "before answering", so the
+ * GAME_RULES_LOCKED.md §19 says the wager happens "before answering", so the
  * lock is the commitment point.
  */
 export interface WagerView {

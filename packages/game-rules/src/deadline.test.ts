@@ -40,7 +40,7 @@ describe('deadline', () => {
   });
 });
 
-// GAME_RULES_LOCKED.md §20 / DECISION_LOG.md D-011 — on pause, active gameplay
+// GAME_RULES_LOCKED.md §22 / DECISION_LOG.md D-011 — on pause, active gameplay
 // timers pause. Paused time must not be charged against a team.
 describe('deadline pause and resume', () => {
   it('does not consume time while paused', () => {

@@ -26,6 +26,17 @@ import * as ui from '../../../rooms/ui';
  * silently fail to refresh a phone. The payloads themselves are never
  * interpreted here — the phone re-reads the authoritative snapshot instead,
  * which is what keeps round knowledge out of the client entirely.
+ *
+ * PHASE 6 ADDITIONS. The comment above already stated this intent when Phase 5
+ * shipped, but the list itself was never actually extended when the shared
+ * systems arrived — every Phase 6 event (a card dealt, a Clash opening or
+ * resolving, the Market opening/closing, a Maco Mail draw, an advantage used, a
+ * Host Deal or a wager) fell through this filter unmatched. A phone's own
+ * REQUEST_GAME_SNAPSHOT reply still updated the screen, and the next matched
+ * event (a BB change, say) would drag a stale card/Market view along with it —
+ * which is why the symptom looked like "needs a refresh, or a few other actions
+ * first" rather than "never updates at all". See packages/protocol/src/
+ * shared-systems.ts SHARED_EVENTS for the full set these prefixes must cover.
  */
 const GAME_EVENT_PREFIXES = [
   'GAME_',
@@ -37,6 +48,16 @@ const GAME_EVENT_PREFIXES = [
   'HOST_RULING',
   'PHASE_',
   'REVIEW_',
+  'BACCHANAL_',
+  'CARD_',
+  'CLASH_',
+  'PART_DAT_FIGHT',
+  'MARKET_',
+  'MACO_MAIL_',
+  'ADVANTAGE_',
+  'HELD_EFFECT_',
+  'HOST_DEAL_',
+  'WAGER_',
 ];
 
 /**

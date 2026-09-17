@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
@@ -99,12 +100,57 @@ namespace BrainsAndBacchanal
         private Vector2 _playerScroll;
         private bool _busy;
 
+        /// <summary>
+        /// UI-state writes deferred from a background thread to Update().
+        ///
+        /// THE BUG THIS EXISTS TO FIX: every async method in this file awaits the
+        /// network client with ConfigureAwait(false) — deliberately, per
+        /// `_gameSnapshotAtTicks`'s comment, because touching Unity's Time API off
+        /// the main thread is illegal and Stopwatch is the safe alternative. The
+        /// cost of that choice is that everything AFTER an awaited call —
+        /// including `_game = snapshot`, `_status = "..."`, `_busy = false` —
+        /// resumes on a thread-pool thread, not Unity's main thread.
+        ///
+        /// OnGUI captures `_game`/`_snapshot` into a local ONCE per invocation
+        /// specifically so Layout and Repaint see identical data within one call
+        /// — but Unity calls OnGUI MORE THAN ONCE per visual frame, and nothing
+        /// stopped a background-thread write from landing between those two
+        /// separate calls. When it did — e.g. `_game` flipping from "not running"
+        /// to "running" between Layout and Repaint — IMGUI throws
+        /// "Getting control N's position in a group with only N controls",
+        /// because the two passes drew a different number of controls.
+        ///
+        /// The fix follows the SAME pattern `BenchmarkWebSocketClient` already
+        /// uses for inbound messages: background threads enqueue an action rather
+        /// than mutating shared state directly, and Update() — main thread only —
+        /// drains and applies them once per frame, before OnGUI runs at all.
+        /// </summary>
+        private readonly ConcurrentQueue<Action> _pendingMainThreadActions = new ConcurrentQueue<Action>();
+
+        /// <summary>
+        /// Queue a UI-state write to run on the main thread.
+        ///
+        /// Every assignment to `_snapshot`, `_game`, `_status`, `_lastError` or
+        /// `_busy` from inside an async continuation MUST go through this rather
+        /// than assigning directly — see `_pendingMainThreadActions`'s comment.
+        /// </summary>
+        private void RunOnMainThread(Action action) => _pendingMainThreadActions.Enqueue(action);
+
         // -------------------------------------------------------------------
         // Lifecycle
         // -------------------------------------------------------------------
 
         private void Update()
         {
+            // Apply queued UI-state writes BEFORE draining messages: a message
+            // handled below may itself queue a follow-up write (RefreshSnapshotAsync
+            // etc.), and applying this frame's backlog first keeps that ordering
+            // predictable rather than interleaved.
+            while (_pendingMainThreadActions.TryDequeue(out var action))
+            {
+                action();
+            }
+
             // Drain on the main thread: the socket's continuations run on thread
             // pool threads and Unity API calls must not.
             foreach (var message in _client.DrainInbound())
@@ -200,14 +246,15 @@ namespace BrainsAndBacchanal
         {
             if (_client.State == BenchmarkWebSocketClient.ConnectionState.Connected) return;
 
-            _status = "Connecting…";
+            RunOnMainThread(() => _status = "Connecting…");
             var ok = await _client.ConnectAsync(SocketUrl).ConfigureAwait(false);
-            _status = ok ? "Connected." : $"Could not connect: {_client.LastError}";
+            var status = ok ? "Connected." : $"Could not connect: {_client.LastError}";
+            RunOnMainThread(() => _status = status);
         }
 
         private async Task CreateRoomAsync()
         {
-            _busy = true;
+            RunOnMainThread(() => _busy = true);
             try
             {
                 await EnsureConnectedAsync().ConfigureAwait(false);
@@ -215,33 +262,39 @@ namespace BrainsAndBacchanal
 
                 // No room exists yet, so the envelope carries the agreed
                 // placeholder (see NO_ROOM_ID in packages/protocol/src/room.ts).
+                // RoomId lives on the client, not on an IMGUI-drawn field, so it
+                // is not subject to the Layout/Repaint race and is set directly.
                 _client.RoomId = "pending";
 
                 var ack = await _client.SubmitAsync(RoomIntents.CreateRoom, "{}").ConfigureAwait(false);
                 if (ack == null || !ack.ok)
                 {
-                    _lastError = ack?.error?.message ?? "Could not create a room.";
+                    var message = ack?.error?.message ?? "Could not create a room.";
+                    RunOnMainThread(() => _lastError = message);
                     return;
                 }
 
                 var payload = JsonUtility.FromJson<RoomCreatedPayload>(ack.snapshotJson);
                 if (payload == null)
                 {
-                    _lastError = "Server sent an unreadable room.";
+                    RunOnMainThread(() => _lastError = "Server sent an unreadable room.");
                     return;
                 }
 
-                _roomCode = payload.roomCode;
-                _hostToken = payload.hostToken;
-                _joinUrl = payload.joinUrl;
                 _client.RoomId = payload.roomId;
-                _snapshot = payload.snapshot;
-                _lastError = "";
-                _status = "Room open.";
+                RunOnMainThread(() =>
+                {
+                    _roomCode = payload.roomCode;
+                    _hostToken = payload.hostToken;
+                    _joinUrl = payload.joinUrl;
+                    _snapshot = payload.snapshot;
+                    _lastError = "";
+                    _status = "Room open.";
+                });
             }
             finally
             {
-                _busy = false;
+                RunOnMainThread(() => _busy = false);
             }
         }
 
@@ -253,11 +306,11 @@ namespace BrainsAndBacchanal
         {
             if (string.IsNullOrEmpty(_hostToken))
             {
-                _lastError = "No Host credential to reconnect with.";
+                RunOnMainThread(() => _lastError = "No Host credential to reconnect with.");
                 return;
             }
 
-            _busy = true;
+            RunOnMainThread(() => _busy = true);
             try
             {
                 await EnsureConnectedAsync().ConfigureAwait(false);
@@ -269,21 +322,25 @@ namespace BrainsAndBacchanal
 
                 if (ack == null || !ack.ok)
                 {
-                    _lastError = ack?.error?.message ?? "Could not restore the room.";
+                    var message = ack?.error?.message ?? "Could not restore the room.";
+                    RunOnMainThread(() => _lastError = message);
                     return;
                 }
 
                 var payload = JsonUtility.FromJson<HostReconnectedPayload>(ack.snapshotJson);
                 if (payload == null) return;
 
-                _roomCode = payload.roomCode;
-                _snapshot = payload.snapshot;
-                _lastError = "";
-                _status = "Room restored.";
+                RunOnMainThread(() =>
+                {
+                    _roomCode = payload.roomCode;
+                    _snapshot = payload.snapshot;
+                    _lastError = "";
+                    _status = "Room restored.";
+                });
             }
             finally
             {
-                _busy = false;
+                RunOnMainThread(() => _busy = false);
             }
         }
 
@@ -297,6 +354,12 @@ namespace BrainsAndBacchanal
         /// overwrites it with the NO_ROOM_ID placeholder before the next
         /// CREATE_ROOM, and the socket itself stays open and reusable — a
         /// closed room does not mean a closed connection.
+        /// </summary>
+        /// <summary>
+        /// Main-thread only: calls Destroy() on a Unity object. Every existing
+        /// call site reaches this from HandleMessage, which Update() already
+        /// calls on the main thread — do not call this from an async
+        /// continuation without wrapping it in RunOnMainThread first.
         /// </summary>
         private void ResetToSetupScreen(string statusMessage)
         {
@@ -325,7 +388,10 @@ namespace BrainsAndBacchanal
             if (ack == null || !ack.ok || string.IsNullOrEmpty(ack.snapshotJson)) return;
 
             var snapshot = JsonUtility.FromJson<LobbySnapshot>(ack.snapshotJson);
-            if (snapshot != null) _snapshot = snapshot;
+            // Deserialised on this (thread-pool) thread, which is fine — only the
+            // FIELD ASSIGNMENT below needs to land on the main thread, since that
+            // is what OnGUI reads.
+            if (snapshot != null) RunOnMainThread(() => _snapshot = snapshot);
         }
 
         /// <summary>
@@ -343,10 +409,19 @@ namespace BrainsAndBacchanal
             var snapshot = JsonUtility.FromJson<HostGameSnapshot>(ack.snapshotJson);
             if (snapshot == null) return;
 
-            _game = snapshot;
-            // Stamped alongside the SAME assignment, so interpolation always
-            // measures from the moment this snapshot's remainingMs was true.
-            _gameSnapshotAtTicks = Stopwatch.GetTimestamp();
+            // Stopwatch.GetTimestamp() is thread-safe and may be read here, off
+            // the main thread — Unity's Time API could not be. But the two writes
+            // below are read by OnGUI's IMGUI control-count logic, so — THE FIX
+            // FOR THE CRASH THIS COMMENT SET OUT TO PREVENT — they must land on
+            // the main thread together, or `_game` and `_gameSnapshotAtTicks`
+            // could be read as a torn pair by two separate OnGUI invocations
+            // (Layout, then Repaint) of the same visual frame.
+            var capturedAtTicks = Stopwatch.GetTimestamp();
+            RunOnMainThread(() =>
+            {
+                _game = snapshot;
+                _gameSnapshotAtTicks = capturedAtTicks;
+            });
         }
 
         /// <summary>
@@ -358,28 +433,30 @@ namespace BrainsAndBacchanal
         /// </summary>
         private async Task SubmitGameIntentAsync(string type, string payloadJson)
         {
-            _busy = true;
+            RunOnMainThread(() => _busy = true);
             try
             {
                 var ack = await _client.SubmitAsync(type, payloadJson).ConfigureAwait(false);
-                _lastError = ack != null && !ack.ok ? ack.error?.message ?? "Rejected." : "";
+                var message = ack != null && !ack.ok ? ack.error?.message ?? "Rejected." : "";
+                RunOnMainThread(() => _lastError = message);
 
                 await RefreshGameSnapshotAsync().ConfigureAwait(false);
                 await RefreshSnapshotAsync().ConfigureAwait(false);
             }
             finally
             {
-                _busy = false;
+                RunOnMainThread(() => _busy = false);
             }
         }
 
         private async Task SubmitHostIntentAsync(string type, string payloadJson)
         {
-            _busy = true;
+            RunOnMainThread(() => _busy = true);
             try
             {
                 var ack = await _client.SubmitAsync(type, payloadJson).ConfigureAwait(false);
-                _lastError = ack != null && !ack.ok ? ack.error?.message ?? "Rejected." : "";
+                var message = ack != null && !ack.ok ? ack.error?.message ?? "Rejected." : "";
+                RunOnMainThread(() => _lastError = message);
 
                 if (ack != null && ack.ok && type == RoomIntents.CloseRoom)
                 {
@@ -396,7 +473,7 @@ namespace BrainsAndBacchanal
             }
             finally
             {
-                _busy = false;
+                RunOnMainThread(() => _busy = false);
             }
         }
 

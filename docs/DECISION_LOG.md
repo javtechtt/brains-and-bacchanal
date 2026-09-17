@@ -284,3 +284,18 @@ immortal.
 
 Sharing one type is what lets "maximum one clue" (§10) be checked over a single
 list regardless of where each clue came from.
+
+## D-029 — Bacchanal Clash Window Raised from 3 to 6 Seconds
+GAME_RULES_LOCKED.md §5 locked the Clash's hidden response window at 3 seconds.
+Physical two-phone testing (Phase 6) showed 3 seconds too short in practice —
+by the time a player noticed a Clash had opened at all, there was often no time
+left to choose and confirm a counter.
+
+The project owner raised it to **6 seconds**. `CLASH_RESPONSE_WINDOW_MS` is the
+one place the duration is defined; §5 is updated to match, and it is otherwise
+unchanged — hidden until reveal, targets locked before reveal, one response per
+team.
+
+This is a genuine rule change, not a bug fix — recorded here rather than
+silently edited into the locked doc, per the same discipline every other locked
+rule gets.

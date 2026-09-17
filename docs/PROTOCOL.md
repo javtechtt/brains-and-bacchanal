@@ -348,7 +348,7 @@ everything.
 | Intent | Notes |
 |---|---|
 | `PLAY_BACCHANAL_CARD` | Opens a Clash |
-| `RESPOND_TO_CLASH` | Secret, inside the 3-second window |
+| `RESPOND_TO_CLASH` | Secret, inside the 6-second window |
 | `PURCHASE_MARKET_ITEM` | Affordability checked **before** deduction |
 | `USE_ADVANTAGE` | Goes through the shared stacking budget |
 | `RESPOND_TO_HOST_DEAL` | `accept` or `decline` — nothing else |

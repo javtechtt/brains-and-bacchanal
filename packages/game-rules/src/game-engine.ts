@@ -919,7 +919,7 @@ export class GameEngine {
     this.#pausedAt = this.#clock.now();
     this.#pausedByPlayerId = pausedByPlayerId;
     this.#timer.pause();
-    // The Clash's 3-second window is a deadline like any other: a team must not
+    // The Clash's 6-second window is a deadline like any other: a team must not
     // lose its chance to counter because someone's phone died. D-011.
     this.#shared.clash.pause();
 
@@ -1207,7 +1207,7 @@ export class GameEngine {
     });
   }
 
-  /** A team secretly counters during the 3-second window. */
+  /** A team secretly counters during the 6-second window. */
   respondToClash(input: {
     readonly teamId: TeamId;
     readonly cardInstanceId: string;

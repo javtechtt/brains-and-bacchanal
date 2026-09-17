@@ -344,14 +344,18 @@ export interface OpponentHandView {
 
 /**
  * The hidden response window, in milliseconds. GAME_RULES_LOCKED.md §5 —
- * "opponents get a 3-second hidden response window".
+ * "opponents get a 6-second hidden response window".
+ *
+ * Raised from 3 to 6 seconds by the project owner after physical testing
+ * showed 3 seconds too short to actually notice and respond to a Clash. See
+ * DECISION_LOG.md D-029.
  *
  * ONE OF THE FEW DURATIONS THAT IS ACTUALLY LOCKED. Think Fast (OPEN_RULES.md
  * §2), Sing a Song (§6) and the Round 4 timers (§11) are all open and must stay
  * caller-supplied; this one is written in the locked rules, so it lives here
  * rather than in a round's configuration.
  */
-export const CLASH_RESPONSE_WINDOW_MS = 3_000;
+export const CLASH_RESPONSE_WINDOW_MS = 6_000;
 
 /** How a Clash ended. GAME_RULES_LOCKED.md §5. */
 export const CLASH_OUTCOMES = [

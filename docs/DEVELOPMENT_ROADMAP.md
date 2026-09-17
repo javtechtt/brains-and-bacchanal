@@ -118,7 +118,7 @@ rule for a mid-game Host disconnect. Nothing in `OPEN_RULES.md` was resolved.
 Built:
 - Bacchanal Cards: ownership, the locked starting deal, lifecycle,
 - the approved eligibility table, configuration-driven,
-- the Bacchanal Clash with its locked 3-second hidden window,
+- the Bacchanal Clash with its locked 6-second hidden window,
 - Part Dat Fight, all five locked cases,
 - the Market: locked prices, hidden shopping, reveal, expiry, surcharges,
 - Maco Mail: the 20-card deck, draw without replacement, the dud rule,

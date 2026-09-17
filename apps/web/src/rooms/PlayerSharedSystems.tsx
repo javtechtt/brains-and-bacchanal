@@ -9,7 +9,7 @@ import {
   type PlayerSharedSystemsView,
   type MarketItem,
 } from '@bb/protocol';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import * as ui from './ui';
 
 /**
@@ -68,30 +68,26 @@ export function PlayerSharedSystems({
         </p>
       )}
 
-      {/* --- Clash counter window ------------------------------------------ */}
+      {/* --- Clash counter window --------------------------------------------
+          Reported as too easy to miss with a plain, same-as-everything-else
+          panel: a team could lose the whole window without noticing a Clash
+          had opened. This uses the loudest treatment on the page — a warning-
+          coloured banner, its own border, and a live countdown built the same
+          way the challenge timer is (server-authoritative remainingMs, client
+          interpolates for a smooth display, never decides expiry) — so a
+          Clash is unmistakable next to the plain "YOUR BACCHANAL CARDS" list
+          it temporarily replaces. */}
       {clashOpen && shared.clash !== null && (
-        <Section title="BACCHANAL CLASH">
-          {shared.yourClashResponse !== null ? (
-            <p style={ui.muted}>Your counter is locked in. Waiting for the reveal…</p>
-          ) : shared.clash.eligibleTeamIds.length > 0 ? (
-            <>
-              <p style={ui.muted}>
-                {CARD_DISPLAY_LABELS[shared.clash.initiatingCardType]} was played. Counter within
-                the window:
-              </p>
-              <CardList
-                cards={shared.yourHand}
-                busy={busy}
-                onPlay={(cardInstanceId, targetTeamId) =>
-                  act(SHARED_INTENTS.RESPOND_TO_CLASH, { cardInstanceId, targetTeamId })
-                }
-                opponentTeamIds={shared.opponentHands.map((o) => o.teamId)}
-              />
-            </>
-          ) : (
-            <p style={ui.muted}>A Clash is running.</p>
-          )}
-        </Section>
+        <ClashBanner
+          clash={shared.clash}
+          yourResponse={shared.yourClashResponse}
+          hand={shared.yourHand}
+          opponentTeamIds={shared.opponentHands.map((o) => o.teamId)}
+          busy={busy}
+          onPlay={(cardInstanceId, targetTeamId) =>
+            act(SHARED_INTENTS.RESPOND_TO_CLASH, { cardInstanceId, targetTeamId })
+          }
+        />
       )}
 
       {/* --- Your Bacchanal hand -------------------------------------------- */}
@@ -338,6 +334,131 @@ function WagerBox({
       </p>
     </Section>
   );
+}
+
+/**
+ * The Clash window, made deliberately impossible to miss.
+ *
+ * GAME_RULES_LOCKED.md §5 gives a team a genuinely short window to react — 6
+ * seconds (D-029, raised from 3 after physical testing showed 3 too easy to
+ * lose without noticing). A player who has the phone in their pocket, or is
+ * looking at the Host display instead of their own screen, needs this to be
+ * the loudest thing on the page the moment it opens — not a panel styled
+ * identically to "your held advantages".
+ */
+function ClashBanner({
+  clash,
+  yourResponse,
+  hand,
+  opponentTeamIds,
+  busy,
+  onPlay,
+}: {
+  clash: NonNullable<PlayerSharedSystemsView['clash']>;
+  yourResponse: string | null;
+  hand: PlayerSharedSystemsView['yourHand'];
+  opponentTeamIds: readonly string[];
+  busy: boolean;
+  onPlay: (cardInstanceId: string, targetTeamId: string | null) => void;
+}) {
+  const remainingMs = useCountdown(clash.remainingMs);
+  const remainingSeconds = Math.max(0, Math.ceil(remainingMs / 1_000));
+  const urgent = remainingMs <= 2_000;
+
+  return (
+    <div
+      role="alert"
+      style={{
+        marginTop: ui.SPACING.md,
+        padding: ui.SPACING.md,
+        borderRadius: ui.RADIUS.md,
+        background: urgent ? ui.COLOR.danger : ui.COLOR.warning,
+        color: '#1a1300',
+        // A CSS animation rather than a JS-driven style flip: it keeps
+        // pulsing smoothly across re-renders without fighting the countdown
+        // interval below for control of this element's style.
+        animation: 'bb-clash-pulse 0.9s ease-in-out infinite',
+      }}
+    >
+      <style>{`
+        @keyframes bb-clash-pulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(0,0,0,0.15); }
+          50% { box-shadow: 0 0 0 8px rgba(0,0,0,0); }
+        }
+      `}</style>
+
+      <p
+        style={{
+          margin: 0,
+          fontSize: ui.FONT_SIZE.lg,
+          fontWeight: ui.FONT_WEIGHT.bold,
+          letterSpacing: 1,
+          textTransform: 'uppercase',
+        }}
+      >
+        ⚡ Bacchanal Clash!
+      </p>
+
+      <p
+        style={{
+          margin: `${ui.SPACING.xs}px 0 0`,
+          fontSize: ui.FONT_SIZE.xxl,
+          fontWeight: ui.FONT_WEIGHT.bold,
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        {remainingSeconds}s
+      </p>
+
+      {yourResponse !== null ? (
+        <p style={{ margin: `${ui.SPACING.xs}px 0 0` }}>
+          Your counter is locked in. Waiting for the reveal…
+        </p>
+      ) : clash.eligibleTeamIds.length > 0 ? (
+        <>
+          <p style={{ margin: `${ui.SPACING.xs}px 0 ${ui.SPACING.sm}px` }}>
+            {CARD_DISPLAY_LABELS[clash.initiatingCardType]} was played. Counter now, or it
+            resolves:
+          </p>
+          <div style={{ background: ui.COLOR.surface, borderRadius: ui.RADIUS.md, padding: ui.SPACING.sm }}>
+            <CardList
+              cards={hand}
+              busy={busy}
+              onPlay={onPlay}
+              opponentTeamIds={opponentTeamIds}
+            />
+          </div>
+        </>
+      ) : (
+        <p style={{ margin: `${ui.SPACING.xs}px 0 0` }}>
+          A Clash is running. You have nothing eligible to counter with.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Interpolate a server-reported countdown between updates.
+ *
+ * The same discipline as PlayerGame.tsx's TimerDisplay: the server's
+ * `remainingMs` is the only authority on when the window closes, this only
+ * makes the number move smoothly between snapshots. Resets whenever a fresh
+ * `remainingMs` arrives, so a snapshot refresh never lets this drift.
+ */
+function useCountdown(remainingMs: number): number {
+  const [displayMs, setDisplayMs] = useState(remainingMs);
+
+  useEffect(() => {
+    setDisplayMs(remainingMs);
+    const startedAt = Date.now();
+    const id = setInterval(() => {
+      setDisplayMs(Math.max(0, remainingMs - (Date.now() - startedAt)));
+    }, 100);
+    return () => clearInterval(id);
+  }, [remainingMs]);
+
+  return displayMs;
 }
 
 /**

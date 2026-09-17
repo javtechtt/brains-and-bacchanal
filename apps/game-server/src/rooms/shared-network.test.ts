@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pino from 'pino';
 import {
+  CLASH_RESPONSE_WINDOW_MS,
   GAME_INTENTS,
   ROOM_INTENTS,
   SHARED_EVENTS,
@@ -415,9 +416,11 @@ describe('the Clash over a real socket', () => {
     }
   });
 
-  it('resolves after the real 3-second window and reveals everything', async () => {
+  it('resolves after the real 6-second window and reveals everything', async () => {
     // A real clock: the window genuinely elapses, and the server's tick — not
-    // an intent — is what closes it.
+    // an intent — is what closes it. D-029 raised the locked window from 3 to
+    // 6 seconds after physical testing showed 3 too short to notice and react
+    // to in time.
     const party = await makeGame();
     try {
       await openCardWindow(party, 'THINK_FAST');
@@ -431,8 +434,8 @@ describe('the Clash over a real socket', () => {
         targetTeamId: 'TEAM_B',
       });
 
-      // Wait out the locked 3-second window, plus the tick interval.
-      await new Promise((resolve) => setTimeout(resolve, 3_600));
+      // Wait out the locked window, plus the server's tick interval.
+      await new Promise((resolve) => setTimeout(resolve, CLASH_RESPONSE_WINDOW_MS + 600));
 
       const after = await playerSnapshot(party.p1);
       // The Clash is gone or resolved; either way the card is no longer pending.
@@ -443,7 +446,7 @@ describe('the Clash over a real socket', () => {
     } finally {
       await closeParty(party);
     }
-  }, 15_000);
+  }, 20_000);
 });
 
 describe('the Market over a real socket', () => {

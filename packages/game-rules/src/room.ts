@@ -487,7 +487,7 @@ export class Room {
       events.push(this.#log.append(expiry.type, { kind: 'server' }, expiry.payload));
     }
 
-    // Phase 6: the Clash's 3-second window is observed the same way, and for
+    // Phase 6: the Clash's 6-second window is observed the same way, and for
     // the same reason — @bb/game-rules schedules nothing. A window that closes
     // with nobody acting is the normal case, since every phone is silent while
     // teams decide whether to counter.

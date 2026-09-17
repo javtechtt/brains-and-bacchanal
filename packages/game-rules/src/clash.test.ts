@@ -202,7 +202,7 @@ describe('three-team Clash', () => {
   });
 });
 
-describe('the three-second response window', () => {
+describe('the six-second response window', () => {
   function makeClash(clock: FakeClock) {
     let counter = 0;
     return new ClashEngine({ clock, mintId: () => `clash-${(counter += 1)}` });
@@ -219,9 +219,10 @@ describe('the three-second response window', () => {
     });
   }
 
-  it('is exactly three seconds', () => {
+  it('is exactly six seconds', () => {
     // GAME_RULES_LOCKED.md §5 — one of the few locked durations in the game.
-    expect(CLASH_RESPONSE_WINDOW_MS).toBe(3_000);
+    // Raised from 3 to 6 seconds after physical testing (D-029).
+    expect(CLASH_RESPONSE_WINDOW_MS).toBe(6_000);
   });
 
   it('accepts a response inside the window', () => {
@@ -229,7 +230,9 @@ describe('the three-second response window', () => {
     const engine = makeClash(clock);
     open(engine);
 
-    clock.advance(2_999);
+    // Derived from the constant, not a hardcoded duration, so this stays
+    // correct if the locked window changes again (D-029 already moved it once).
+    clock.advance(CLASH_RESPONSE_WINDOW_MS - 1);
     const responded = engine.respond({
       teamId: TEAM_B,
       cardInstanceId: 'card-b',
@@ -245,7 +248,7 @@ describe('the three-second response window', () => {
     const engine = makeClash(clock);
     open(engine);
 
-    clock.advance(3_001);
+    clock.advance(CLASH_RESPONSE_WINDOW_MS + 1);
     const responded = engine.respond({
       teamId: TEAM_B,
       cardInstanceId: 'card-b',
@@ -334,7 +337,7 @@ describe('the three-second response window', () => {
     const clock = new FakeClock(1_000);
     const engine = makeClash(clock);
     open(engine);
-    clock.advance(3_001);
+    clock.advance(CLASH_RESPONSE_WINDOW_MS + 1);
 
     const first = engine.resolve();
     const second = engine.resolve();

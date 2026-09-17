@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { asChallengeId, asTeamId, type BacchanalCardType } from '@bb/protocol';
+import {
+  asChallengeId,
+  asTeamId,
+  CLASH_RESPONSE_WINDOW_MS,
+  type BacchanalCardType,
+} from '@bb/protocol';
 import { BbLedger } from './bb-ledger.js';
 import { FakeClock } from './clock.js';
 import { SeededRng } from './rng.js';
@@ -68,7 +73,7 @@ describe('an uncontested card resolves', () => {
     });
     expect(played.ok).toBe(true);
 
-    clock.advance(3_001);
+    clock.advance(CLASH_RESPONSE_WINDOW_MS + 1);
     const resolved = systems.resolveClash();
 
     expect(resolved.ok).toBe(true);
@@ -109,7 +114,7 @@ describe('a resolved Clash stays visible until the next one opens', () => {
       paused: false,
       allTeamIds: TEAMS,
     });
-    clock.advance(3_001);
+    clock.advance(CLASH_RESPONSE_WINDOW_MS + 1);
     const resolved = systems.resolveClash();
     expect(resolved.ok).toBe(true);
 
@@ -141,7 +146,7 @@ describe('a resolved Clash stays visible until the next one opens', () => {
       allTeamIds: TEAMS,
     });
     systems.respondToClash({ teamId: TEAM_B, cardInstanceId: b.cardInstanceId, paused: false });
-    clock.advance(3_001);
+    clock.advance(CLASH_RESPONSE_WINDOW_MS + 1);
     systems.resolveClash();
 
     const clash = systems.playerView(TEAM_A, false).clash;
@@ -170,7 +175,7 @@ describe('a resolved Clash stays visible until the next one opens', () => {
       paused: false,
       allTeamIds: TEAMS,
     });
-    clock.advance(3_001);
+    clock.advance(CLASH_RESPONSE_WINDOW_MS + 1);
     systems.resolveClash();
     const firstClashId = systems.hostView().clash?.clashId;
 
@@ -208,7 +213,7 @@ describe('the multiplier is shared across every source', () => {
       paused: false,
       allTeamIds: TEAMS,
     });
-    clock.advance(3_001);
+    clock.advance(CLASH_RESPONSE_WINDOW_MS + 1);
     systems.resolveClash();
 
     expect(systems.isDoubledFor(TEAM_A)).toBe(true);
@@ -249,7 +254,7 @@ describe('Bacchanal Immunity', () => {
       paused: false,
       allTeamIds: TEAMS,
     });
-    clock.advance(3_001);
+    clock.advance(CLASH_RESPONSE_WINDOW_MS + 1);
     const resolved = systems.resolveClash();
 
     expect(resolved.ok).toBe(true);
@@ -313,7 +318,7 @@ describe('a losing card returns but the team stays barred', () => {
       paused: false,
     });
 
-    clock.advance(3_001);
+    clock.advance(CLASH_RESPONSE_WINDOW_MS + 1);
     const resolved = systems.resolveClash();
 
     // DISRUPTION beats POWER: Steups wins.
@@ -352,7 +357,7 @@ describe('a losing card returns but the team stays barred', () => {
     });
     systems.respondToClash({ teamId: TEAM_B, cardInstanceId: b.cardInstanceId, paused: false });
 
-    clock.advance(3_001);
+    clock.advance(CLASH_RESPONSE_WINDOW_MS + 1);
     const resolved = systems.resolveClash();
 
     expect(resolved.ok).toBe(true);
@@ -566,7 +571,7 @@ describe('the Phase 6 exit scenario', () => {
       targetTeamId: TEAM_A,
       paused: false,
     });
-    clock.advance(3_001);
+    clock.advance(CLASH_RESPONSE_WINDOW_MS + 1);
 
     const clash = systems.resolveClash();
     expect(clash.ok).toBe(true);

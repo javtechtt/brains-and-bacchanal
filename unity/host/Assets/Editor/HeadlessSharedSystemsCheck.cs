@@ -221,8 +221,9 @@ namespace BrainsAndBacchanal.EditorTools
                             "respondedTeamIds=" + Describe(duringSnap.shared.clash.respondedTeamIds));
                     }
 
-                    // Wait out the locked 3-second window, plus the server tick.
-                    await Task.Delay(3600).ConfigureAwait(false);
+                    // Wait out the locked window (6s — D-029 raised it from 3s
+                    // after physical testing), plus the server's tick interval.
+                    await Task.Delay(6600).ConfigureAwait(false);
 
                     var afterClash = await PlayerGameSnapshot(hostClient).ConfigureAwait(false);
                     var clash = afterClash?.shared?.clash;

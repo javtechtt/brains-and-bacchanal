@@ -100,7 +100,7 @@ If both are available:
 ## 5. Bacchanal Clash
 
 When a Bacchanal Card is played:
-- opponents get a **3-second hidden response window**,
+- opponents get a **6-second hidden response window**,
 - responding teams secretly choose one eligible card,
 - targets are locked before reveal.
 

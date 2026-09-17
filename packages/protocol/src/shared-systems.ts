@@ -78,7 +78,7 @@ export const SHARED_INTENTS = {
   HOST_CLOSE_CARD_WINDOW: 'HOST_CLOSE_CARD_WINDOW',
   /** A team plays one of its cards. Player intent. */
   PLAY_BACCHANAL_CARD: 'PLAY_BACCHANAL_CARD',
-  /** A team secretly counters during the 3-second Clash window. Player intent. */
+  /** A team secretly counters during the 6-second Clash window. Player intent. */
   RESPOND_TO_CLASH: 'RESPOND_TO_CLASH',
 
   // --- Market -------------------------------------------------------------

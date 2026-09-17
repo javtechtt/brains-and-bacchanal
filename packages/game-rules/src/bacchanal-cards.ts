@@ -381,7 +381,7 @@ export class BacchanalCards {
    * reached — the same split as every Phase 5 intent.
    *
    * The card becomes PENDING, not CONSUMED. GAME_RULES_LOCKED.md §5 gives
-   * opponents a 3-second window to counter, and a card that loses returns to
+   * opponents a 6-second window to counter, and a card that loses returns to
    * hand — so consumption waits for the Clash to resolve.
    */
   play(input: {

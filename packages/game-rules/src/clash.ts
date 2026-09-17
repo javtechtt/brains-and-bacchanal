@@ -21,7 +21,7 @@ import { hasExpired, remainingMs, startDeadline, type Deadline } from './deadlin
 /**
  * The Bacchanal Clash and Part Dat Fight.
  *
- * GAME_RULES_LOCKED.md §5. When a card is played, opponents get a 3-second
+ * GAME_RULES_LOCKED.md §5. When a card is played, opponents get a 6-second
  * hidden window to counter with one eligible card. Then everything is revealed
  * at once and the category triangle decides.
  *
@@ -90,7 +90,7 @@ export class ClashEngine {
   /**
    * Open a Clash around a card that has just been played.
    *
-   * GAME_RULES_LOCKED.md §5 — "opponents get a 3-second hidden response window".
+   * GAME_RULES_LOCKED.md §5 — "opponents get a 6-second hidden response window".
    * The duration is locked, so it is a constant rather than a caller parameter;
    * almost every other duration in this game is still open (OPEN_RULES.md §2,
    * §6, §11) and stays caller-supplied.

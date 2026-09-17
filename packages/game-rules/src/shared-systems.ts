@@ -112,7 +112,7 @@ export class SharedSystems {
    * Play a card and open a Clash around it.
    *
    * GAME_RULES_LOCKED.md §5 — "When a Bacchanal Card is played: opponents get a
-   * 3-second hidden response window." Every play opens one; a Clash with no
+   * 6-second hidden response window." Every play opens one; a Clash with no
    * responses resolves as `uncontested` and the card simply works, which is the
    * same rule with an empty response set rather than a separate path.
    */

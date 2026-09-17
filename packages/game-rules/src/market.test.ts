@@ -221,6 +221,63 @@ describe('hidden shopping', () => {
   });
 });
 
+describe('frozen opponent balances while the Market is open', () => {
+  // GAME_RULES_LOCKED.md §10 — "shopping is hidden" — and Phase 5's balances
+  // being a visible scoreboard otherwise defeat each other: a live BB drop
+  // during an open Market reveals "they bought something" even though WHAT
+  // stays hidden until reveal. Market itself only RECORDS the frozen figure —
+  // the actual substitution into a player's view is room.ts's job, since that
+  // is where "who is asking" and the secrecy boundary both live. These tests
+  // cover the recording; shared-network.test.ts covers the substitution
+  // against a real player snapshot.
+  it('records every named team\'s balance at the moment the Market opens', () => {
+    const { market, ledger } = setup(1_000);
+    market.open_(2, [TEAM_A, TEAM_B]);
+
+    expect(market.frozenBalanceFor(TEAM_A)).toBe(1_000);
+    expect(market.frozenBalanceFor(TEAM_B)).toBe(1_000);
+
+    // A purchase afterward changes the LEDGER but not the frozen snapshot.
+    market.purchase({ teamId: TEAM_A, item: 'CLUE' });
+    expect(ledger.balanceOf(TEAM_A)).toBe(800);
+    expect(market.frozenBalanceFor(TEAM_A)).toBe(1_000);
+  });
+
+  it('returns null for a team never named at open time', () => {
+    const { market } = setup();
+    market.open_(2, [TEAM_A]);
+
+    expect(market.frozenBalanceFor(TEAM_B)).toBeNull();
+  });
+
+  it('returns null before any Market has ever opened', () => {
+    const { market } = setup();
+    expect(market.frozenBalanceFor(TEAM_A)).toBeNull();
+  });
+
+  it('captures a NEW frozen figure for the next activation', () => {
+    // A team that ended Round 2's Market at 800 should freeze at 800 for
+    // Round 3's Market, not at whatever it held when Round 2's Market opened.
+    const { market } = setup(1_000);
+    market.open_(2, [TEAM_A]);
+    market.purchase({ teamId: TEAM_A, item: 'CLUE' });
+    market.close();
+
+    market.open_(3, [TEAM_A]);
+    expect(market.frozenBalanceFor(TEAM_A)).toBe(800);
+  });
+
+  it('still opens correctly when called without team ids', () => {
+    // Existing callers (and any that never learn about this feature) must not
+    // break — open_() keeps working with the same one-argument call it always
+    // took, and frozenBalanceFor simply has nothing to report.
+    const { market } = setup();
+    const opened = market.open_(2);
+    expect(opened.ok).toBe(true);
+    expect(market.frozenBalanceFor(TEAM_A)).toBeNull();
+  });
+});
+
 describe('the Price Gone Up! surcharge', () => {
   it('adds 500 to the next purchase', () => {
     // GAME_RULES_LOCKED.md §8, Phase 6 spec §33.

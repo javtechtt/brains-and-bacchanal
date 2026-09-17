@@ -328,6 +328,9 @@ export class Room {
       yourTeamId: teamId,
       youAreActive: role.kind === 'player' && this.#game.isActivePlayer(playerId),
       yourTurn: this.#isYourTurn(playerId, teamId),
+      // Phase 6 — an opponent's BB freezes at its Market-open value while the
+      // Market is open. See #teamsForPlayer.
+      teams: this.#teamsForPlayer(teamId),
       // Phase 6. Scoped to the caller's OWN team — a player with no team gets
       // null rather than a view of someone else's, and an unidentified
       // connection lands here too (teamId is null), so the narrow path is also
@@ -338,6 +341,34 @@ export class Room {
           : null,
     };
     return playerSnapshot;
+  }
+
+  /**
+   * Team balances as ONE PLAYER'S TEAM may see them.
+   *
+   * GAME_RULES_LOCKED.md §10 — "shopping is hidden" — and Phase 5's balances
+   * being a visible scoreboard otherwise defeat each other: watching an
+   * opponent's live BB tick down during an open Market reveals "they bought
+   * something" (and roughly how much) even though WHAT stays hidden until
+   * reveal. So while the Market is open, every OTHER team's balance is frozen
+   * at what it was the moment the Market opened; the asking team's OWN balance
+   * stays real-time, and once the Market closes everyone snaps back to live
+   * figures together with the purchase reveal.
+   *
+   * THE HOST IS UNAFFECTED — this is only ever called for a player snapshot.
+   * The Host adjudicates and already sees every purchase as it happens, so
+   * freezing anything from the Host would hide nothing that matters and would
+   * only make the Host's own job harder.
+   */
+  #teamsForPlayer(askingTeamId: TeamId | null): readonly GameTeamView[] {
+    const teams = this.#gameTeams();
+    if (!this.#game.started || !this.#game.shared.market.open) return teams;
+
+    return teams.map((team) => {
+      if (team.teamId === askingTeamId) return team;
+      const frozen = this.#game.shared.market.frozenBalanceFor(team.teamId);
+      return frozen === null ? team : { ...team, bb: frozen };
+    });
   }
 
   /**

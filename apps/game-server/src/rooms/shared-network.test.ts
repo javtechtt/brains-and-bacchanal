@@ -490,6 +490,46 @@ describe('the Market over a real socket', () => {
     }
   });
 
+  it("freezes an opponent's visible BB while shopping stays hidden, unfreezing at close", async () => {
+    // A live BB drop would leak "they bought something" even though WHAT they
+    // bought stays hidden (§10) — the same information the item-hiding rule
+    // already protects, leaking through a different channel. Team A's OWN
+    // balance stays real-time throughout; only what TEAM B sees of Team A
+    // freezes.
+    const party = await makeGame();
+    try {
+      await party.host.submit(SHARED_INTENTS.HOST_OPEN_MARKET, { round: 2 });
+
+      // Before any purchase, both teams agree on the balance.
+      const beforeA = await playerSnapshot(party.p1);
+      const beforeB = await playerSnapshot(party.p2);
+      expect(beforeA.teams.find((t) => t.teamId === 'TEAM_A')?.bb).toBe(1_000);
+      expect(beforeB.teams.find((t) => t.teamId === 'TEAM_A')?.bb).toBe(1_000);
+
+      await party.p1.submit(SHARED_INTENTS.PURCHASE_MARKET_ITEM, { item: 'EXTRA_TIME' });
+
+      // Team A sees its OWN new balance immediately.
+      const afterA = await playerSnapshot(party.p1);
+      expect(afterA.teams.find((t) => t.teamId === 'TEAM_A')?.bb).toBe(800);
+
+      // Team B still sees Team A frozen at the PRE-purchase figure.
+      const afterB = await playerSnapshot(party.p2);
+      expect(afterB.teams.find((t) => t.teamId === 'TEAM_A')?.bb).toBe(1_000);
+
+      // The Host is unaffected — it adjudicates and already sees purchases.
+      const hostView = await hostSnapshot(party);
+      expect(hostView.teams.find((t) => t.teamId === 'TEAM_A')?.bb).toBe(800);
+
+      // Closing the Market snaps everyone to the real figure, together with
+      // the purchase reveal.
+      await party.host.submit(SHARED_INTENTS.HOST_CLOSE_MARKET, {});
+      const closedB = await playerSnapshot(party.p2);
+      expect(closedB.teams.find((t) => t.teamId === 'TEAM_A')?.bb).toBe(800);
+    } finally {
+      await closeParty(party);
+    }
+  });
+
   it('refuses a duplicate purchase intent without charging twice', async () => {
     // Phase 6 spec §20 — a retried intent must not spend BB twice. The Phase 2
     // idempotency registry does this; here it is proven over a real socket.

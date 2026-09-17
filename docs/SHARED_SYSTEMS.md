@@ -329,6 +329,24 @@ count. A count would itself reveal how much an opponent has committed, which is
 what §10's hidden shopping protects. `revealed` is an explicit recorded flag
 rather than `!open`, so a client cannot show purchases a moment early.
 
+### An opponent's visible BB freezes too
+
+Found during physical two-phone testing: Phase 5 makes every team's BB always
+visible, on purpose — "a party game shows the scores on a TV" — and that
+otherwise defeats §10's hidden shopping through a side channel. A live balance
+dropping by 250 while the Market is open tells an opponent "they bought
+something, and roughly what tier", even with the item itself correctly hidden.
+
+So while a Market is open, a player's snapshot shows every **other** team's BB
+frozen at the value it held the moment that Market opened
+(`Market.frozenBalanceFor`); the asking team's **own** BB stays real-time. On
+close, every balance snaps back to its true current value together with the
+purchase reveal — the same moment §10 already reveals purchases.
+
+**The Host is unaffected.** `frozenBalanceFor` is applied only when building a
+*player* snapshot (`room.ts`); the Host's own `teams` stays fully live, because
+the Host adjudicates and already sees every purchase as it happens.
+
 ### Expiry
 
 §10 — items "expire after the immediately following round". Bought before Round

@@ -1270,7 +1270,8 @@ export class GameEngine {
     const guard = this.#requireRunning();
     if (guard !== null) return err(guard);
 
-    const opened = this.#shared.market.open_(round);
+    const teamIds = [...this.#teams.keys()].map((id) => asTeamId(id));
+    const opened = this.#shared.market.open_(round, teamIds);
     if (!opened.ok) return err(opened.error);
 
     return ok({ type: 'MARKET_OPENED', payload: { market: opened.value } });

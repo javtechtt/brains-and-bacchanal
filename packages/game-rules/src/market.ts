@@ -45,6 +45,19 @@ interface MarketActivation {
   readonly openedAt: ReturnType<typeof asServerTimestamp>;
   closedAt: ReturnType<typeof asServerTimestamp> | null;
   revealed: boolean;
+  /**
+   * Every team's BB at the moment this activation opened.
+   *
+   * GAME_RULES_LOCKED.md §10 — "shopping is hidden" — and Phase 5's balances
+   * being always-visible (a scoreboard) otherwise defeat each other: an
+   * opponent watching a live balance drop learns "they bought something", and
+   * roughly how much, even though WHAT they bought stays hidden until reveal.
+   * This is the frozen figure every OTHER team is shown while the Market is
+   * open; the room (room.ts) is what actually substitutes it into a player
+   * snapshot — Market only records the value, since the secrecy boundary and
+   * "which team is asking" both live there, not here.
+   */
+  readonly teamBalancesAtOpen: ReadonlyMap<string, number>;
 }
 
 interface PurchaseRecord extends MarketPurchaseView {
@@ -95,7 +108,7 @@ export class Market {
    * 4 only. The runtime check below catches a value that arrived off the wire
    * and bypassed the type.
    */
-  open_(round: number): Result<MarketView> {
+  open_(round: number, teamIds: readonly TeamId[] = []): Result<MarketView> {
     if (this.#activation?.open === true) {
       return err(rejection('WRONG_STATE', 'The Market is already open.'));
     }
@@ -105,6 +118,15 @@ export class Market {
       );
     }
 
+    // Read every team's CURRENT balance once, at the moment of opening. §10 —
+    // "shopping is hidden" — needs this: without it, a live balance drop during
+    // an open Market would tell an opponent "they bought something" (and
+    // roughly how much) even though the item itself stays hidden until reveal.
+    const teamBalancesAtOpen = new Map<string, number>();
+    for (const teamId of teamIds) {
+      teamBalancesAtOpen.set(teamId, this.#ledger.balanceOf(teamId));
+    }
+
     this.#activation = {
       marketId: this.#mintId(),
       round,
@@ -112,9 +134,27 @@ export class Market {
       openedAt: asServerTimestamp(this.#clock.now()),
       closedAt: null,
       revealed: false,
+      teamBalancesAtOpen,
     };
 
     return ok(this.view() as MarketView);
+  }
+
+  /**
+   * A team's BB as it should be shown to an OPPONENT while the Market is open.
+   *
+   * Null when there is nothing to freeze: no Market has ever opened, or the
+   * team was not known when this one did (joined after — Phase 4 locks teams
+   * before a game starts, so that should not happen, but null is the honest
+   * answer rather than 0). The caller (room.ts) falls back to the live balance
+   * in that case, since freezing nothing is the safe direction to fail in.
+   *
+   * NOT used for the asking team's OWN balance — a team always sees its own
+   * real-time BB, only opponents are frozen. That distinction is the room's to
+   * make, since it is the room that knows who is asking.
+   */
+  frozenBalanceFor(teamId: TeamId): number | null {
+    return this.#activation?.teamBalancesAtOpen.get(teamId) ?? null;
   }
 
   /**

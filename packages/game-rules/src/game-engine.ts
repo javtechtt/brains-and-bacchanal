@@ -2163,6 +2163,31 @@ export class GameEngine {
     const round = this.#round1;
     if (round === null) return err(rejection('WRONG_STATE', 'Round 1 has not started.'));
 
+    // ============ THE CARD MUST ACTUALLY HAVE RESOLVED ============
+    // `Round1.grantMaco` checks the ROUND's rules — the right nominee, a target
+    // that has already submitted. It knows nothing about cards, and must not:
+    // card ownership, legality and the Clash all belong to SharedSystems (§5).
+    //
+    // Without this gate any nominee could read an opponent's answer for free,
+    // because nothing else connects the played card to its effect. An effect
+    // appears here only once it has SURVIVED its Clash, which is what lets an
+    // opponent's counter stop a Maco before it reveals anything.
+    const resolved = this.#shared
+      .activeEffects()
+      .some(
+        (effect) =>
+          effect.cardType === 'MACO' &&
+          effect.owningTeamId === input.viewingTeamId &&
+          effect.active,
+      );
+    if (!resolved) {
+      return err(
+        rejection('ILLEGAL_ACTION', 'Your team has no Maco! in play.', {
+          teamId: input.viewingTeamId,
+        }),
+      );
+    }
+
     const granted = round.grantMaco(input);
     if (!granted.ok) return err(granted.error);
 

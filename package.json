@@ -9,6 +9,7 @@
   },
   "scripts": {
     "dev": "pnpm --parallel --filter \"./apps/**\" dev",
+    "game": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-game.ps1",
     "build:packages": "pnpm --recursive --filter \"./packages/**\" build",
     "build": "pnpm build:packages && pnpm --recursive --filter \"./apps/**\" build",
     "typecheck": "pnpm build:packages && pnpm --recursive typecheck",

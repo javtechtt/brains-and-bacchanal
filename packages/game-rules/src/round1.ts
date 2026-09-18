@@ -664,6 +664,28 @@ export class Round1 {
    * that is recorded as an override.
    * ==============================================================
    */
+  /**
+   * Which answer slot a ruling for this team should land on RIGHT NOW.
+   *
+   * True once a retry answer is in and still ungraded. The Host's CORRECT/WRONG
+   * means "the answer on my screen", and only the server knows which slot that
+   * is — see `rulingTargetsRetry` in the protocol for what went wrong when this
+   * was left to the client.
+   */
+  rulingTargetsRetry(teamId: TeamId): boolean {
+    const answer = this.#currentQuestion()?.answers.get(teamId);
+    if (answer === undefined) return false;
+    if (answer.retrySubmission === null) return false;
+
+    // Ungraded, OR graded only as "the machine could not decide". Both still
+    // need the HOST's ruling, and both must land on the RETRY slot — a retry
+    // sitting on NEEDS_HOST_REVIEW is exactly the state that blocked the
+    // reveal on hardware, so it must not be treated as already settled.
+    return (
+      answer.retryRuling === null || answer.retryRuling.verdict === 'NEEDS_HOST_REVIEW'
+    );
+  }
+
   recordRuling(input: {
     readonly teamId: TeamId;
     readonly verdict: Round1Verdict;
@@ -1454,6 +1476,21 @@ export class Round1 {
       source: revealed || hostView ? (ruling?.source ?? null) : null,
       hostOverrode: ruling?.hostOverrode ?? false,
       usedRetry: answer.retrySubmission !== null || answer.retryOpen,
+      // Open ONLY while the team may still type. Goes false the moment the
+      // retry answer lands, so the countdown stops rather than ticking on
+      // beside an answer already in.
+      retryOpen: answer.retryOpen && answer.retrySubmission === null,
+      retryRemainingMs:
+        answer.retryOpen && answer.retrySubmission === null && answer.retryDeadline !== null
+          ? Math.max(0, remainingMs(this.#clock, answer.retryDeadline))
+          : null,
+      // The retry slot owns the next ruling while a retry answer is in and
+      // still needs the Host — ungraded, or graded only as NEEDS_HOST_REVIEW.
+      // See the field's note in the protocol.
+      rulingTargetsRetry:
+        answer.retrySubmission !== null &&
+        (answer.retryRuling === null ||
+          answer.retryRuling.verdict === 'NEEDS_HOST_REVIEW'),
       awardedBb: answer.awardedBb,
       awardedPoints: answer.awardedPoints,
       doubled: answer.doubled,
@@ -1510,7 +1547,13 @@ export class Round1 {
           attempt.revealed || isOwnTeam || hostView ? (answer.ruling?.verdict ?? null) : null,
         source: attempt.revealed || hostView ? (answer.ruling?.source ?? null) : null,
         hostOverrode: answer.ruling?.hostOverrode ?? false,
+        // A tiebreak attempt has no retry: §11's FORGIVE MEH! applies to the
+        // fifteen normal questions, and D-032 gave the tiebreak no retry of its
+        // own. So a tiebreak ruling always targets the first (only) answer.
         usedRetry: false,
+        retryOpen: false,
+        retryRemainingMs: null,
+        rulingTargetsRetry: false,
         // ⚠ ALWAYS ZERO. Spec §12 — a tiebreak question moves no BB and no
         // Round 1 points. These fields exist because the view is shared with
         // the normal questions; they are never written here.

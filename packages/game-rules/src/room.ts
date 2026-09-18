@@ -836,6 +836,8 @@ export class Room {
         return this.#nextRound1Question(connectionId, intent);
       case ROUND1_INTENTS.SUBMIT_ROUND1_ANSWER:
         return this.#submitRound1Answer(connectionId, intent);
+      case ROUND1_INTENTS.VIEW_ROUND1_MACO:
+        return this.#viewRound1Maco(connectionId, intent);
       case ROUND1_INTENTS.HOST_CLOSE_ROUND1_QUESTION:
         return this.#closeRound1Question(connectionId, intent);
       case ROUND1_INTENTS.HOST_RULE_ROUND1_ANSWER:
@@ -2600,6 +2602,59 @@ export class Room {
   }
 
   /**
+   * MACO! — look at one opponent's already-submitted answer. §11, D-030.
+   *
+   * ================== WHY THIS IS ITS OWN INTENT ==================
+   * PLAY_BACCHANAL_CARD commits the CARD and opens a Clash window on it. This
+   * performs the card's EFFECT, once that has resolved. Keeping them separate
+   * is what lets a Clash cancel a Maco before it has revealed anything —
+   * collapsing them would leak the answer at the moment the card was played,
+   * before anyone could counter it.
+   *
+   * THE VIEWER COMES FROM THE CONNECTION. Only `targetTeamId` is read from the
+   * payload, so a phone cannot look on another player's behalf. The engine then
+   * checks that this player is their team's nominee for the current difficulty
+   * and that the target has actually submitted — §11's guarantee that a
+   * half-typed answer is never exposed.
+   *
+   * The answer text goes back in THIS CONNECTION'S acknowledgement only, and
+   * lives in that one player's snapshot until it expires. The broadcast event
+   * says a Maco happened and names the target; it never carries the words.
+   */
+  #viewRound1Maco(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const role = this.roleOf(connectionId);
+    if (role.kind !== 'player') {
+      return this.#reject(rejection('UNAUTHORIZED_ACTOR', 'Only a joined player can play Maco!.'));
+    }
+    const team = this.#requireTeam(connectionId);
+    if (!team.ok) return this.#reject(team.error);
+
+    const targetTeamId = readString(intent.payload, 'targetTeamId');
+    if (targetTeamId === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Name the team to look at.'));
+    }
+
+    const granted = this.#game.grantRound1Maco({
+      viewingTeamId: team.value,
+      viewingPlayerId: role.playerId,
+      targetTeamId: asTeamId(targetTeamId),
+    });
+    if (!granted.ok) return this.#reject(granted.error);
+
+    const published = this.#publish(granted.value, intent);
+    if (!published.ack.ok) return published;
+
+    // The acknowledgement carries the answer to the one player entitled to it.
+    return {
+      ...published,
+      ack: ok({
+        seq: published.ack.value.seq,
+        payload: { maco: this.#game.round1?.view(team.value, role.playerId)?.macoView ?? null },
+      }),
+    };
+  }
+
+  /**
    * Host closes the answer window and grades what came in.
    *
    * Deterministic grading runs INLINE here and decides the overwhelming
@@ -2824,7 +2879,20 @@ export class Room {
       return { ack: ok({ seq: event.seq }), broadcast: [event], direct: [], closeConnections: [] };
     }
 
-    const isRetry = readBoolean(intent.payload, 'isRetry') ?? false;
+    // WHICH SLOT IS THE SERVER'S DECISION, NOT THE CLIENT'S.
+    //
+    // The Host means "rule on the answer I am looking at". When a retry answer
+    // is in and ungraded that is the RETRY slot, otherwise the first answer.
+    // Reading it from the payload (as this originally did) meant the Unity
+    // panel — which never sent the flag — silently ruled the first answer every
+    // time, leaving the retry un-ruled and the reveal permanently blocked.
+    //
+    // `isRetry` is still accepted from the payload as an explicit override, for
+    // a client that genuinely needs to correct the earlier answer after a retry
+    // has been graded. Absent, the server decides.
+    const explicit = readBoolean(intent.payload, 'isRetry');
+    const isRetry = explicit ?? (round?.rulingTargetsRetry(asTeamId(teamId)) ?? false);
+
     const outcome = this.#game.recordRound1Ruling({
       teamId: asTeamId(teamId),
       verdict: verdict as Round1Verdict,

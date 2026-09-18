@@ -16,6 +16,7 @@ import {
   ROUND1_RETRY_WINDOW_MS,
   ROUND1_TIEBREAK_WINDOW_MS,
   ROUND1_VALUES,
+  CLASH_RESPONSE_WINDOW_MS,
   SHARED_INTENTS,
   type IntentEnvelope,
   type PlayerId,
@@ -849,6 +850,37 @@ describe('DOUBLE IT! doubles BOTH totals', () => {
 // ---------------------------------------------------------------------------
 
 describe('MACO! shows one submitted answer, to one player, for ten seconds', () => {
+  /**
+   * Put a resolved MACO effect in play for one team.
+   *
+   * The engine requires the CARD to have survived its Clash before it will
+   * reveal anything — card ownership belongs to SharedSystems, the round only
+   * knows about nominees and submissions. Tests that expect a grant to succeed
+   * therefore have to play the card for real, exactly as a phone would.
+   *
+   * Returns false when this seed dealt no MACO, so callers can skip.
+   */
+  function playMacoCard(h: Harness, teamId: TeamId, phone: string): boolean {
+    // Cards must already be DEALT: revealing a question starts a fresh engine
+    // challenge, and `endChallenge` clears the card window, so dealing here
+    // would leave the hand unplayable. Callers deal before the question opens.
+    const snapshot = h.room.gameSnapshot(phone);
+    const maco = snapshot.shared?.yourHand.find((c) => c.cardType === 'MACO');
+    if (maco === undefined) return false;
+
+    const played = h.player(phone, SHARED_INTENTS.PLAY_BACCHANAL_CARD, {
+      cardInstanceId: maco.cardInstanceId,
+      targetTeamId: teamId === TEAM_A ? TEAM_B : TEAM_A,
+    });
+    if (!played.ack.ok) return false;
+
+    // Let the 6-second Clash window close with nobody countering, so the
+    // effect actually resolves (§5, D-029).
+    h.clock.advance(CLASH_RESPONSE_WINDOW_MS + 1);
+    h.room.tick();
+    return true;
+  }
+
   it('refuses a target that has not submitted yet', () => {
     // §11 — "the target team must have already submitted". This is what
     // guarantees a half-typed answer is never exposed.
@@ -865,54 +897,73 @@ describe('MACO! shows one submitted answer, to one player, for ten seconds', () 
   });
 
   it('shows the answer only to the viewing nominee', () => {
-    const h = makeRoom({ teamCount: 3 });
-    enterQuestions(h);
-    nextQuestion(h);
+    // Seeds are searched until one deals TEAM_A a MACO, so the assertion is
+    // about the card's effect rather than about a particular deal.
+    let checked = false;
+    for (let attempt = 0; attempt < 40 && !checked; attempt += 1) {
+      const h = makeRoom({ teamCount: 3 });
+      enterQuestions(h);
+      h.host(SHARED_INTENTS.HOST_DEAL_BACCHANAL_CARDS);
+      nextQuestion(h);
 
-    h.player(PHONE_2, ROUND1_INTENTS.SUBMIT_ROUND1_ANSWER, { answer: 'B SUBMITTED ANSWER' });
+      h.player(PHONE_2, ROUND1_INTENTS.SUBMIT_ROUND1_ANSWER, { answer: 'B SUBMITTED ANSWER' });
+      if (!playMacoCard(h, TEAM_A, PHONE_1)) continue;
+      checked = true;
 
-    const granted = h.room.game.grantRound1Maco({
-      viewingTeamId: TEAM_A,
-      viewingPlayerId: h.players[0]!,
-      targetTeamId: TEAM_B,
-    });
-    expect(granted.ok).toBe(true);
+      const granted = h.room.game.grantRound1Maco({
+        viewingTeamId: TEAM_A,
+        viewingPlayerId: h.players[0]!,
+        targetTeamId: TEAM_B,
+      });
+      expect(granted.ok).toBe(true);
 
-    // The viewer sees it.
-    expect(JSON.stringify(h.room.gameSnapshot(PHONE_1))).toContain('B SUBMITTED ANSWER');
-    // The uninvolved third team does NOT.
-    expect(JSON.stringify(h.room.gameSnapshot(PHONE_3))).not.toContain('B SUBMITTED ANSWER');
-    // And neither does the public view.
-    expect(JSON.stringify(h.room.game.round1View())).not.toContain('B SUBMITTED ANSWER');
+      // The viewer sees it.
+      expect(JSON.stringify(h.room.gameSnapshot(PHONE_1))).toContain('B SUBMITTED ANSWER');
+      // The uninvolved third team does NOT.
+      expect(JSON.stringify(h.room.gameSnapshot(PHONE_3))).not.toContain('B SUBMITTED ANSWER');
+      // And neither does the public view.
+      expect(JSON.stringify(h.room.game.round1View())).not.toContain('B SUBMITTED ANSWER');
+    }
+    expect(checked).toBe(true);
   });
 
   it('expires after ten seconds and does not come back on reconnect', () => {
     // Spec §8, §16 — "Reconnect must not create a new Maco viewing entitlement
     // after it has expired."
-    const h = makeRoom();
-    enterQuestions(h);
-    nextQuestion(h);
-    h.player(PHONE_2, ROUND1_INTENTS.SUBMIT_ROUND1_ANSWER, { answer: 'B SUBMITTED ANSWER' });
+    let checked = false;
+    for (let attempt = 0; attempt < 40 && !checked; attempt += 1) {
+      const h = makeRoom();
+      enterQuestions(h);
+      h.host(SHARED_INTENTS.HOST_DEAL_BACCHANAL_CARDS);
+      nextQuestion(h);
+      h.player(PHONE_2, ROUND1_INTENTS.SUBMIT_ROUND1_ANSWER, { answer: 'B SUBMITTED ANSWER' });
+      if (!playMacoCard(h, TEAM_A, PHONE_1)) continue;
+      checked = true;
 
-    h.room.game.grantRound1Maco({
-      viewingTeamId: TEAM_A,
-      viewingPlayerId: h.players[0]!,
-      targetTeamId: TEAM_B,
-    });
-    expect(JSON.stringify(h.room.gameSnapshot(PHONE_1))).toContain('B SUBMITTED ANSWER');
+      h.room.game.grantRound1Maco({
+        viewingTeamId: TEAM_A,
+        viewingPlayerId: h.players[0]!,
+        targetTeamId: TEAM_B,
+      });
+      expect(JSON.stringify(h.room.gameSnapshot(PHONE_1))).toContain('B SUBMITTED ANSWER');
 
-    h.clock.advance(ROUND1_MACO_VIEW_MS + 1);
-    h.room.tick();
+      h.clock.advance(ROUND1_MACO_VIEW_MS + 1);
+      h.room.tick();
 
-    expect(JSON.stringify(h.room.gameSnapshot(PHONE_1))).not.toContain('B SUBMITTED ANSWER');
+      expect(JSON.stringify(h.room.gameSnapshot(PHONE_1))).not.toContain('B SUBMITTED ANSWER');
 
-    // And a fresh connection for the same player still sees nothing.
-    h.room.onConnect(PHONE_1B);
-    h.room.handle(
-      PHONE_1B,
-      intent(ROOM_INTENTS.RECONNECT_PLAYER, { playerId: h.players[0], reconnectToken: h.tokens[0] }),
-    );
-    expect(JSON.stringify(h.room.gameSnapshot(PHONE_1B))).not.toContain('B SUBMITTED ANSWER');
+      // And a fresh connection for the same player still sees nothing.
+      h.room.onConnect(PHONE_1B);
+      h.room.handle(
+        PHONE_1B,
+        intent(ROOM_INTENTS.RECONNECT_PLAYER, {
+          playerId: h.players[0],
+          reconnectToken: h.tokens[0],
+        }),
+      );
+      expect(JSON.stringify(h.room.gameSnapshot(PHONE_1B))).not.toContain('B SUBMITTED ANSWER');
+    }
+    expect(checked).toBe(true);
   });
 
   it('does not copy or submit the answer it shows', () => {
@@ -930,6 +981,52 @@ describe('MACO! shows one submitted answer, to one player, for ten seconds', () 
 
     const own = h.round1().current?.answers.find((a) => a.teamId === TEAM_A);
     expect(own?.submitted).toBe(false);
+  });
+
+  it('is reachable over the WIRE, by the intent a phone actually sends', async () => {
+    // PHYSICAL TEST BUG. `grantRound1Maco` existed on the engine and was
+    // tested directly — but no intent ever reached it, and no UI could pick a
+    // target. On real hardware the card could be played and never aimed:
+    // "the card needs a target team", with no way to choose one.
+    let checked = false;
+    for (let attempt = 0; attempt < 40 && !checked; attempt += 1) {
+      const h = makeRoom();
+      enterQuestions(h);
+      h.host(SHARED_INTENTS.HOST_DEAL_BACCHANAL_CARDS);
+      nextQuestion(h);
+
+      h.player(PHONE_2, ROUND1_INTENTS.SUBMIT_ROUND1_ANSWER, { answer: 'B SUBMITTED ANSWER' });
+      if (!playMacoCard(h, TEAM_A, PHONE_1)) continue;
+      checked = true;
+
+      const viewed = h.player(PHONE_1, ROUND1_INTENTS.VIEW_ROUND1_MACO, {
+        targetTeamId: 'TEAM_B',
+      });
+      expect(viewed.ack.ok).toBe(true);
+
+      // The viewing player now sees it...
+      expect(JSON.stringify(h.room.gameSnapshot(PHONE_1))).toContain('B SUBMITTED ANSWER');
+      // ...and the PUBLIC view still does not, which is the leak that matters.
+      // (TEAM_B's own snapshot contains it because it is their own answer.)
+      expect(JSON.stringify(h.room.game.round1View())).not.toContain('B SUBMITTED ANSWER');
+    }
+    expect(checked).toBe(true);
+  });
+
+  it('refuses a team with no Maco! in play', () => {
+    // The card is what entitles a team to look. Without this gate any nominee
+    // could read an opponent's answer for free, because nothing else connected
+    // the played card to its effect.
+    const h = makeRoom();
+    enterQuestions(h);
+    nextQuestion(h);
+    h.player(PHONE_2, ROUND1_INTENTS.SUBMIT_ROUND1_ANSWER, { answer: 'B SUBMITTED ANSWER' });
+
+    const viewed = h.player(PHONE_1, ROUND1_INTENTS.VIEW_ROUND1_MACO, {
+      targetTeamId: 'TEAM_B',
+    });
+    expect(viewed.ack.ok).toBe(false);
+    expect(JSON.stringify(h.room.gameSnapshot(PHONE_1))).not.toContain('B SUBMITTED ANSWER');
   });
 
   it('refuses to target your own team', () => {
@@ -1084,6 +1181,111 @@ describe('FORGIVE MEH! gives one 10-second retry after a wrong ruling', () => {
 
     expect(h.round1().current?.correctAnswer).toBeNull();
     expect(JSON.stringify(h.room.gameSnapshot(PHONE_1))).not.toContain(correctAnswerFor(h));
+  });
+
+  it('gives the retry its own per-team countdown', async () => {
+    // PHYSICAL TEST BUG. The retry window had no countdown anywhere: the
+    // question's `remainingMs` is the 60-second clock and is null by now, and
+    // the per-team retry deadline was never put on the wire at all. A Host and
+    // a player both saw a retry with no visible time limit.
+    const h = makeRoom();
+    enterQuestions(h);
+    nextQuestion(h);
+
+    h.player(PHONE_1, ROUND1_INTENTS.SUBMIT_ROUND1_ANSWER, { answer: 'clearly wrong' });
+    h.host(ROUND1_INTENTS.HOST_CLOSE_ROUND1_QUESTION);
+    await settleReview(h);
+    h.host(ROUND1_INTENTS.HOST_OPEN_ROUND1_RETRY, { teamId: 'TEAM_A' });
+
+    const answer = h.round1().current?.answers.find((a) => a.teamId === TEAM_A);
+    expect(answer?.retryOpen).toBe(true);
+    expect(answer?.retryRemainingMs).toBe(ROUND1_RETRY_WINDOW_MS);
+
+    // It ticks down with the clock, and the team that is NOT retrying has none.
+    h.clock.advance(4_000);
+    const later = h.round1().current?.answers.find((a) => a.teamId === TEAM_A);
+    expect(later?.retryRemainingMs).toBe(ROUND1_RETRY_WINDOW_MS - 4_000);
+
+    const other = h.round1().current?.answers.find((a) => a.teamId === TEAM_B);
+    expect(other?.retryOpen).toBe(false);
+    expect(other?.retryRemainingMs).toBeNull();
+  });
+
+  it('stops the countdown once the retry answer is in', async () => {
+    const h = makeRoom();
+    enterQuestions(h);
+    nextQuestion(h);
+
+    h.player(PHONE_1, ROUND1_INTENTS.SUBMIT_ROUND1_ANSWER, { answer: 'clearly wrong' });
+    h.host(ROUND1_INTENTS.HOST_CLOSE_ROUND1_QUESTION);
+    await settleReview(h);
+    h.host(ROUND1_INTENTS.HOST_OPEN_ROUND1_RETRY, { teamId: 'TEAM_A' });
+    h.player(PHONE_1, ROUND1_INTENTS.SUBMIT_ROUND1_ANSWER, { answer: 'second try' });
+
+    const answer = h.round1().current?.answers.find((a) => a.teamId === TEAM_A);
+    expect(answer?.retryOpen).toBe(false);
+    expect(answer?.retryRemainingMs).toBeNull();
+  });
+
+  it('rules the RETRY answer without the client naming the slot', async () => {
+    // PHYSICAL TEST BUG, and the worst of the three. `isRetry` was read from
+    // the client payload; the Unity Host panel never sent it, so every ruling
+    // during a retry landed on the FIRST answer's slot. The retry stayed
+    // un-ruled, `needsHostReview` never cleared, and the reveal was refused
+    // forever with "the Host must rule on every uncertain answer first" — no
+    // matter how many times the Host ruled.
+    const h = makeRoom();
+    enterQuestions(h);
+    nextQuestion(h);
+
+    const difficulty = h.round1().current?.difficulty as Round1Difficulty;
+
+    h.player(PHONE_1, ROUND1_INTENTS.SUBMIT_ROUND1_ANSWER, { answer: 'clearly wrong' });
+    h.host(ROUND1_INTENTS.HOST_CLOSE_ROUND1_QUESTION);
+    await settleReview(h);
+    h.host(ROUND1_INTENTS.HOST_OPEN_ROUND1_RETRY, { teamId: 'TEAM_A' });
+
+    // A retry the deterministic layers CANNOT decide, so it reaches the judge,
+    // which has no opinion with no AI configured — exactly the live setup.
+    // This is what made the bug visible on hardware: the retry sits needing a
+    // HOST ruling, and the Host's ruling was landing on the wrong slot.
+    h.player(PHONE_1, ROUND1_INTENTS.SUBMIT_ROUND1_ANSWER, { answer: 'a vague guess' });
+    // First tick QUEUES the judgement; the verdict lands on a later one once
+    // the promise settles. Two ticks with a yield between them is what a real
+    // server gets for free.
+    h.room.tick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    h.room.tick();
+
+    const stuck = h.room.game
+      .round1View(null, null, true)
+      ?.current?.answers.find((a) => a.teamId === TEAM_A);
+    expect(stuck?.verdict).toBe('NEEDS_HOST_REVIEW');
+    expect(h.host(ROUND1_INTENTS.HOST_REVEAL_ROUND1_ANSWER).ack.ok).toBe(false);
+
+    // The server says the next ruling belongs to the retry, and the Host sends
+    // NO isRetry flag — exactly what the Unity panel does.
+    const pending = h.room.game
+      .round1View(null, null, true)
+      ?.current?.answers.find((a) => a.teamId === TEAM_A);
+    expect(pending?.rulingTargetsRetry).toBe(true);
+
+    h.host(ROUND1_INTENTS.HOST_RULE_ROUND1_ANSWER, { teamId: 'TEAM_A', verdict: 'CORRECT' });
+
+    // THE RULING LANDED ON THE RETRY SLOT. With the bug it landed on the first
+    // answer instead, leaving this null — which is what left the reveal
+    // permanently blocked however many times the Host ruled.
+    const ruled = h.room.game
+      .round1View(null, null, true)
+      ?.current?.answers.find((a) => a.teamId === TEAM_A);
+    expect(ruled?.rulingTargetsRetry).toBe(false);
+    expect(ruled?.verdict).toBe('CORRECT');
+    expect(h.room.game.round1?.pendingGrading()).toHaveLength(0);
+
+    // The reveal is no longer blocked, and the retry is what scored.
+    const revealed = h.host(ROUND1_INTENTS.HOST_REVEAL_ROUND1_ANSWER);
+    expect(revealed.ack.ok).toBe(true);
+    expect(h.points(TEAM_A)).toBe(ROUND1_VALUES[difficulty]);
   });
 
   it('allows a MAXIMUM of one retry on the same question', async () => {

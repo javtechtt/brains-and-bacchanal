@@ -253,7 +253,23 @@ namespace BrainsAndBacchanal
                 }
                 else
                 {
-                    GUILayout.Label($"   \"{answer.answer}\"", WrapStyle);
+                    // The server already resolves `answer` to the RETRY text
+                    // once one is in, so this is always the answer that counts.
+                    // Labelled so the Host knows which one they are reading.
+                    var which = answer.rulingTargetsRetry ? "   retry: " : "   ";
+                    GUILayout.Label($"{which}\"{answer.answer}\"", WrapStyle);
+                }
+
+                // A retry window actually running, with its own countdown. §11
+                // gives the retry 10 seconds (D-032) and it is per-team, which
+                // is why this is here rather than beside the question's clock.
+                if (answer.retryOpen)
+                {
+                    var previous = GUI.color;
+                    GUI.color = Color.yellow;
+                    GUILayout.Label(
+                        $"   FORGIVE MEH! — {Mathf.CeilToInt(answer.retryRemainingMs / 1000f)}s to answer");
+                    GUI.color = previous;
                 }
 
                 if (!string.IsNullOrEmpty(answer.verdict))
@@ -283,8 +299,18 @@ namespace BrainsAndBacchanal
                 // The Host rules on any submitted answer, at any time before the
                 // reveal. Not only the uncertain ones — §4E lets the Host
                 // correct an automated ruling too.
+                //
+                // WHICH answer these rule is the SERVER'S decision — see
+                // rulingTargetsRetry. The payload deliberately carries no
+                // isRetry flag: sending one from here is what broke the retry
+                // flow in the first place.
                 if (answer.submitted && !question.IsRevealed)
                 {
+                    if (answer.rulingTargetsRetry)
+                    {
+                        GUILayout.Label("   ruling applies to the RETRY answer");
+                    }
+
                     GUILayout.BeginHorizontal();
                     GUI.enabled = !_busy;
                     if (GUILayout.Button("CORRECT"))

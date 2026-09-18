@@ -158,6 +158,33 @@ namespace BrainsAndBacchanal.Protocol
         public bool hostOverrode;
         public bool usedRetry;
 
+        /// <summary>
+        /// A FORGIVE MEH! retry window is OPEN for this team right now.
+        ///
+        /// Distinct from <see cref="usedRetry"/>, which stays true afterwards.
+        /// This is true only while the team may still type.
+        /// </summary>
+        public bool retryOpen;
+
+        /// <summary>
+        /// Milliseconds left in THIS TEAM'S retry window.
+        ///
+        /// A JSON null arrives as 0 (JsonUtility cannot express null on a
+        /// number), so read <see cref="retryOpen"/> to know whether a window is
+        /// actually running rather than treating 0 as "expired".
+        /// </summary>
+        public int retryRemainingMs;
+
+        /// <summary>
+        /// Whether the next CORRECT/WRONG for this team lands on the RETRY answer.
+        ///
+        /// The server decides this; the Host panel only displays what it means.
+        /// Phase 7C originally left the choice to the client, and the panel
+        /// never sent it — so a retry could never be ruled and the reveal stayed
+        /// blocked. Do not reintroduce a client-side guess here.
+        /// </summary>
+        public bool rulingTargetsRetry;
+
         /// <summary>BB awarded. Doubled where Double It! applied.</summary>
         public int awardedBb;
 

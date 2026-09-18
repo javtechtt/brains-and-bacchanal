@@ -312,12 +312,54 @@ view is wrong, which is how Phase 6, 7A and 7B each found a bug.
 |---|---|
 | `pnpm typecheck` | pass |
 | `pnpm lint` | pass |
-| `pnpm test` | **1018** (73 Round 1, 34 grading, 8 network) |
+| `pnpm test` | **1023** (78 Round 1, 34 grading, 8 network) |
 | `pnpm build` | pass |
-| compiled-server walkthrough | **30/30** |
+| compiled-server walkthrough | **30/30**, plus **12/12** for the physical-test fixes |
 | Unity headless Round 1 | **41/41**, 0 compile errors |
 | Unity regressions | Round 3 36/36, Round 2 36/36, engine 49/49, shared 43/43, lobby 47/47 |
 | IL2CPP Windows standalone | Succeeded, 0 errors, 0 warnings |
+
+### Bugs found by PHYSICAL testing
+
+Three, all in the client-facing wiring rather than the engine — the `Round1`
+rules my automated tests exercised directly were correct in each case. They are
+the reason physical testing exists.
+
+**1. Maco! could be played but never aimed.** `grantRound1Maco` existed on the
+engine and was tested by calling it directly, but **no wire intent ever reached
+it** and no UI offered a target. On hardware the card failed with "the card
+needs a target team" and there was no way to choose one. Fixed with a dedicated
+`VIEW_ROUND1_MACO` intent, a room handler, and a target picker that offers only
+teams which have actually submitted (§11).
+
+It is deliberately *separate* from `PLAY_BACCHANAL_CARD`: that intent commits
+the CARD and opens a Clash on it, while this performs the EFFECT once the Clash
+has resolved. Collapsing them would reveal the answer at the moment the card was
+played, before anyone could counter it.
+
+The same fix closed a real hole: nothing connected the played card to its
+effect, so **any nominee could have read an opponent's answer for free**. The
+engine now requires a resolved, active MACO effect owned by the viewing team.
+
+**2. The retry had no countdown.** `Round1QuestionView.remainingMs` is the
+question's 60-second clock and is null by retry time; the per-team
+`retryDeadline` was **never put on the wire at all**. Fixed by adding
+`retryOpen` and `retryRemainingMs` to the answer view — per team, because §11
+gives the retry to one team at a time and each window starts when the Host
+opens it. The countdown stops the moment the retry answer lands.
+
+**3. A Host ruling during a retry landed on the wrong answer — and blocked the
+reveal permanently.** The worst of the three. `isRetry` was read from the client
+payload, and the Unity Host panel never sent it, so every ruling defaulted to
+the FIRST answer's slot. The retry stayed un-ruled, and the reveal was refused
+with *"the Host must rule on every uncertain answer first"* no matter how many
+times the Host ruled — which is exactly what happened at the table.
+
+Fixed by making the slot **the server's decision**: `rulingTargetsRetry` is true
+while a retry answer is in and still needs the Host — ungraded, *or* graded only
+as `NEEDS_HOST_REVIEW`. That second case is what made it visible live, since no
+AI judge is configured and ambiguous answers always land there. The payload flag
+survives only as an explicit override for correcting an earlier answer.
 
 ### Bugs found while building
 

@@ -84,7 +84,15 @@ export function PlayerRound1({
         />
       )}
 
-      {round1.macoView !== null && <MacoPanel round1={round1} />}
+      {round1.macoView !== null ? (
+        <MacoPanel round1={round1} />
+      ) : (
+        <MacoTargets
+          round1={round1}
+          yourTeamId={yourTeamId}
+          {...(submit === undefined ? {} : { submit })}
+        />
+      )}
 
       <Standings round1={round1} yourTeamId={yourTeamId} />
     </div>
@@ -248,6 +256,7 @@ function Question({
 
       <AnswerBox
         round1={round1}
+        yourTeamId={yourTeamId}
         paused={paused}
         {...(submit === undefined ? {} : { submit })}
       />
@@ -269,10 +278,12 @@ function Question({
  */
 function AnswerBox({
   round1,
+  yourTeamId,
   paused,
   submit,
 }: {
   round1: Round1StateView;
+  yourTeamId: TeamId | null;
   paused: boolean;
   submit?: (type: string, payload?: unknown) => Promise<{ ok: boolean; message?: string }>;
 }) {
@@ -302,6 +313,13 @@ function AnswerBox({
 
   const isRetry = question?.phase === 'retry';
 
+  // The retry clock is PER TEAM — §11 gives the retry to one team at a time and
+  // each window starts when the Host opens it, so it lives on this team's own
+  // answer row rather than on the question (whose 60 seconds are long gone).
+  const ownAnswer = question?.answers.find((a) => a.teamId === yourTeamId);
+  const retryRemainingMs =
+    ownAnswer?.retryOpen === true ? (ownAnswer.retryRemainingMs ?? null) : null;
+
   const send = async () => {
     if (answer.trim().length === 0) return;
     setBusy(true);
@@ -321,6 +339,13 @@ function AnswerBox({
       >
         {isRetry ? 'FORGIVE MEH! — one last answer' : `Your answer (${round1.yourNomineeRole})`}
       </p>
+
+      {/* The retry's own 10-second clock (D-032). Per team, so it comes from
+          this team's answer row rather than from the question. */}
+      {retryRemainingMs !== null && (
+        <Countdown remainingMs={retryRemainingMs} paused={paused} />
+      )}
+
       <input
         style={ui.input}
         value={answer}
@@ -427,6 +452,87 @@ function SubmissionStatus({
  * Seeing the answer neither copies nor submits it: the nominee reads it and
  * decides for themselves what to type.
  */
+/**
+ * Choosing WHO to Maco. §11, spec §8.
+ *
+ * ================== WHY A PICKER EXISTS AT ALL ==================
+ * Maco! is the only Round 1 card that needs a target chosen by the player at
+ * the moment it resolves, and Phase 7C shipped without this — the card could be
+ * played but never aimed, so it always failed with "needs a target team". The
+ * effect is its own intent (VIEW_ROUND1_MACO) precisely so a Clash can cancel
+ * the card before any answer is revealed.
+ * ===============================================================
+ *
+ * Only offers teams that have ACTUALLY SUBMITTED, because §11 requires it —
+ * a half-typed answer is never exposed, and the server refuses anything else.
+ * Only the nominated answerer sees this, which `youMaySubmit`-adjacent state
+ * cannot express, so it keys off the nominee role directly.
+ */
+function MacoTargets({
+  round1,
+  yourTeamId,
+  submit,
+}: {
+  round1: Round1StateView;
+  yourTeamId: TeamId | null;
+  submit?: (type: string, payload?: unknown) => Promise<{ ok: boolean; message?: string }>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const question = round1.current;
+  if (question === null || submit === undefined) return null;
+  if (round1.yourNomineeRole === null) return null;
+
+  // The nominee for THIS question's difficulty, and only while answers are
+  // still being taken or graded — the server enforces the same window.
+  if (round1.yourNomineeRole !== question.difficulty) return null;
+  if (question.phase !== 'open' && question.phase !== 'grading') return null;
+
+  const targets = question.answers.filter((a) => a.teamId !== yourTeamId && a.submitted);
+  if (targets.length === 0) return null;
+
+  const look = async (targetTeamId: TeamId) => {
+    setBusy(true);
+    setError(null);
+    const result = await submit('VIEW_ROUND1_MACO', { targetTeamId });
+    setBusy(false);
+    if (!result.ok) setError(result.message ?? 'That did not go through.');
+  };
+
+  return (
+    <div
+      style={{
+        marginTop: ui.SPACING.md,
+        padding: ui.SPACING.md,
+        borderRadius: ui.RADIUS.md,
+        border: `1px dashed ${ui.COLOR.border}`,
+      }}
+    >
+      <p style={{ ...ui.muted, margin: 0 }}>
+        MACO! — look at a team that has already answered
+      </p>
+      <div style={{ display: 'grid', gap: ui.SPACING.sm, marginTop: ui.SPACING.sm }}>
+        {targets.map((target) => (
+          <button
+            key={target.teamId}
+            type="button"
+            style={ui.secondaryButton}
+            onClick={() => void look(target.teamId)}
+            disabled={busy}
+          >
+            {busy ? 'Looking…' : `Look at ${teamLabel(target.teamId)}`}
+          </button>
+        ))}
+      </div>
+      <p style={{ ...ui.muted, margin: `${ui.SPACING.xs}px 0 0` }}>
+        You still type your own answer — seeing theirs does not submit anything.
+      </p>
+      {error !== null && <p style={ui.errorText}>{error}</p>}
+    </div>
+  );
+}
+
 function MacoPanel({ round1 }: { round1: Round1StateView }) {
   const maco = round1.macoView;
   if (maco === null) return null;
@@ -529,6 +635,7 @@ function Tiebreak({
           )}
           <AnswerBox
             round1={round1}
+            yourTeamId={yourTeamId}
             paused={paused}
             {...(submit === undefined ? {} : { submit })}
           />

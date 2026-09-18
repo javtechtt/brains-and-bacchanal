@@ -243,6 +243,37 @@ export interface Round1TeamAnswerView {
   readonly source: Round1GradeSource | null;
   readonly hostOverrode: boolean;
   readonly usedRetry: boolean;
+  /**
+   * A FORGIVE MEH! retry window is OPEN for this team right now.
+   *
+   * Distinct from `usedRetry`, which stays true afterwards. This one is true
+   * only while the team may still type, and is what drives the retry countdown.
+   */
+  readonly retryOpen: boolean;
+  /**
+   * Milliseconds left in THIS TEAM'S retry window, or null when none is open.
+   *
+   * Per-team rather than on the question, because §11 gives the retry to one
+   * team at a time and each window starts when the Host opens it. The
+   * question's own `remainingMs` is the 60-second window and is null by now.
+   */
+  readonly retryRemainingMs: number | null;
+  /**
+   * Whether the NEXT ruling for this team should land on the retry answer.
+   *
+   * ================== WHY THE SERVER DECIDES THIS ==================
+   * A Host pressing CORRECT/WRONG means "rule on the answer I am looking at",
+   * and which storage slot that is depends on state the Host cannot see. When
+   * a retry answer is in and ungraded, the ruling belongs to the RETRY slot;
+   * otherwise it belongs to the first answer.
+   *
+   * Phase 7C originally read this from the client payload, and the Unity panel
+   * never sent it — so every ruling during a retry silently landed on the first
+   * answer and the retry stayed un-ruled forever, blocking the reveal. The
+   * server computes it now, and the client does not get a say.
+   * =================================================================
+   */
+  readonly rulingTargetsRetry: boolean;
   /** BB awarded for this question. Doubled where Double It! applied. */
   readonly awardedBb: number;
   /** Round 1 points awarded. Mirrors `awardedBb`, and is NOT the same total. */
@@ -490,6 +521,19 @@ export const ROUND1_INTENTS = {
   HOST_NEXT_ROUND1_QUESTION: 'HOST_NEXT_ROUND1_QUESTION',
   /** The nominated player submits the team's answer. Final. */
   SUBMIT_ROUND1_ANSWER: 'SUBMIT_ROUND1_ANSWER',
+  /**
+   * Look at one opponent's already-submitted answer. §11, D-030.
+   *
+   * PLAYER intent, and only the nominated answerer for the current difficulty.
+   * Carries `targetTeamId`; the viewing team and player come from the
+   * connection, never the payload.
+   *
+   * Separate from PLAY_BACCHANAL_CARD deliberately: that intent commits the
+   * CARD (and opens a Clash window on it), while this one performs the card's
+   * EFFECT once it has resolved. Collapsing them would mean a Clash could not
+   * cancel a Maco before it revealed anything.
+   */
+  VIEW_ROUND1_MACO: 'VIEW_ROUND1_MACO',
   /** Host closes the window early and starts grading. */
   HOST_CLOSE_ROUND1_QUESTION: 'HOST_CLOSE_ROUND1_QUESTION',
   /** Host rules on one team's answer. §4E. */

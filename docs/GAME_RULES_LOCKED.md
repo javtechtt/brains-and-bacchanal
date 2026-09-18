@@ -320,13 +320,81 @@ running total, not a second BB transaction.
 - if it is wrong, there is no additional benefit.
 
 **FORGIVE MEH!**
-- available after the team's first answer is wrong,
-- the nominated player gets one final retry **before** the correct answer is
-  revealed,
+- available after the team's first answer has a **final INCORRECT ruling**,
+- the nominated player gets **10 seconds** for one final retry **before** the
+  correct answer is revealed,
+- the retry answer is final and is what the question is scored on,
 - the shared one-retry maximum still applies (§4), so it cannot be chained with
   the Market's Second Chance.
 
-The exact retry-window duration is **not yet decided** — see `OPEN_RULES.md`.
+The 10-second window was resolved by the project owner (D-032), closing what was
+`OPEN_RULES.md` §13.
+
+### Answers and grading
+
+Answers are **free text**, typed by the nominated player.
+
+- **60 seconds** per question; a submission is **final** and cannot be replaced,
+- a team that does not submit is treated as having no correct answer — which is
+  **not** the same as a wrong answer, and does not open FORGIVE MEH!,
+- grading is **server-authoritative** and runs deterministic layers first
+  (normalisation, canonical/variant match, a conservative typo tolerance), then
+  an AI semantic judge only for answers still genuinely ambiguous,
+- an unavailable, slow, malformed or unsure judge returns **NEEDS_HOST_REVIEW**;
+  it never guesses,
+- **the Host is the final authority** and may rule any answer correct or
+  incorrect, including overturning an automated ruling,
+- a stored ruling is **reused, never recomputed** — a reconnect or refresh must
+  not re-grade an answer.
+
+### The reveal is last
+
+The correct answer is revealed only after grading, any Host review and any
+FORGIVE MEH! retry have all completed. A retrying player must never see the
+answer they are about to give.
+
+### Round 1 score and placement
+
+Two totals are kept, and they are **not** the same:
+
+| | What it is | Decides |
+|---|---|---|
+| **BB** | The question's value, awarded to the main balance | The game's score |
+| **Round 1 points** | The same value, counted separately | The Round 1 winner |
+
+The Round 1 winner is the team with the **highest Round 1 points** after all 15
+questions — **not** the highest BB. The two usually agree, but BB also moves in
+the Market, so they can differ.
+
+### Round 1 sudden-death trivia tiebreaker
+
+If two or more teams tie on the highest Round 1 points, they play a
+sudden-death trivia tiebreaker (D-032).
+
+**This is NOT the end-of-game Sudden Death of §21.** That mode needs two
+consecutive correct answers, uses the phone buzzer and wins the whole game. This
+one only decides who won Round 1.
+
+- only teams still tied for the highest Round 1 points take part,
+- the content source supplies additional approved questions,
+- every remaining tied team gets the **same** question, with a **30-second**
+  answer window,
+- the same grading pipeline and the same nominated answerer apply,
+- **no BB is awarded or deducted, and no Round 1 points are added** — the
+  tiebreaker exists only to eliminate.
+
+Resolution:
+
+- exactly **one** correct → that team wins Round 1,
+- **some but not all** correct → the incorrect teams are eliminated; the rest
+  continue,
+- **all** correct → nothing separates them; play another question,
+- **none** correct → nothing separates them; play another question.
+
+Repeat until one team remains.
+
+No Bacchanal card behaviour is defined for the tiebreaker, and none is invented:
+cards are simply unavailable there.
 
 ## 12. Round 2 — Shake Up Yuhself!
 

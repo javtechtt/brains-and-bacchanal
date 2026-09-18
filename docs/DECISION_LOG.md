@@ -432,3 +432,85 @@ invent challenge content during play. See `CONTENT_POLICY.md`.
 
 **Nothing is implemented.** Round 3 is not built; this is the locked-rule
 reconciliation that precedes building it.
+
+## D-032 — Round 1 Retry Window, Sudden-Death Tiebreaker and Grading
+Phase 7C asked for three things the locked docs did not cover. The project owner
+resolved each rather than letting the implementation assume one.
+
+### The FORGIVE MEH! retry window is 10 seconds
+
+`OPEN_RULES.md` §13 had left this open since D-030, listing "the remainder of the
+original 60 seconds" and "a fresh, shorter window" as the candidates. **The owner
+chose a fresh 10-second window.** It starts when the Host opens the retry, not
+when the question closed, so a team that spent 58 seconds on its first answer
+still gets the full 10.
+
+This closes §13. Round 1 is now fully locked.
+
+### Round 1 gets a sudden-death trivia tiebreaker
+
+No locked rule said what a Round 1 tie did — §11 was silent, and §21's Sudden
+Death is the separate end-of-game mode. **The owner locked a new one.**
+
+Tied teams answer additional supplied questions, 30 seconds each, same grading,
+same nominated answerer. Exactly one correct wins; some-but-not-all eliminates
+the incorrect; all-correct and none-correct both replay.
+
+**It moves no BB and adds no Round 1 points.** The tiebreaker exists only to
+eliminate, so the fifteen questions' totals are already final when it starts.
+
+**Kept architecturally distinct from §21**, per the Phase 7C spec: a separate
+type system, separate events, and it never enters the `SUDDEN_DEATH` phase.
+Confusing the two would be easy and expensive — one decides a round, the other
+decides the game.
+
+No Bacchanal card behaviour is defined for the tiebreaker. Rather than invent
+one, cards are simply unavailable there, and this is recorded as deliberate.
+
+### Free-text grading is a pipeline, and the Host is still the authority
+
+Round 1 is machine-graded free text, which is new — every previous round was
+judged by the Host by ear. Four layers run in order of confidence:
+
+1. **normalise** — case, whitespace, accents, punctuation, `&`/`and`, a leading
+   article,
+2. **exact match** against the canonical answer and approved variants,
+3. **fuzzy match** — Damerau-Levenshtein, tolerance by length: **0 edits at 1-4
+   characters**, 1 at 5-11, 2 at 12+,
+4. **AI semantic judge**, and only for what the first three could not decide.
+
+The short-answer rule is the important one: "Ford"/"Fort" and "Iran"/"Iraq" are
+one edit apart and are different answers, so nothing is forgiven at that length.
+
+**The bias is toward asking, not guessing.** A false accept silently awards BB
+and nobody notices; a NEEDS_HOST_REVIEW costs the Host two seconds. Those costs
+are not symmetric and the thresholds are not either.
+
+**No AI provider is chosen.** The repository has no provider decision, and
+Phase 7C deliberately does not make one by default: it ships a vendor-neutral
+`AnswerSemanticJudge` interface, a refusing default, and a deterministic stub for
+tests. Unavailable, timed out, malformed or unsure all return NEEDS_HOST_REVIEW.
+The game is fully playable with no AI at all; the Host simply rules more often.
+
+A stored ruling is **reused, never recomputed** — re-grading on reconnect could
+return a different verdict and make a score depend on when a phone woke up.
+
+### Round 1 is the first round with active players
+
+D-021 defines an active player as one the current challenge requires. Rounds 2
+and 3 mark nobody, because their challenges are spoken and Host-judged. Round 1
+is different: the nominated answerer is the only person who can submit.
+
+**The owner scoped it to an open question.** A nominee counts as active only
+while an answer window is actually running — not during nomination, grading,
+review or the reveal — and a team that has already submitted stops needing its
+nominee awake. Pausing a party is disruptive, and outside an open window there is
+nothing for the player to do anyway.
+
+### A consequence of D-030 worth recording
+
+Removing Gimme Dat! and Doh Know from Round 1 left them with **no legal challenge
+anywhere**, exactly as Maco! had none before. That is a real consequence of Round
+1 dropping individually assigned questions, not an oversight. Family Feud and
+Round 4 may yet give them one; until then they are dealt and held, unplayable,
+and `CARDS_WITHOUT_LEGAL_CHALLENGE` names them.

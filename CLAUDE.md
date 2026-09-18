@@ -36,6 +36,7 @@ Implementation references (generated during development, not rule sources):
 - `docs/SHARED_SYSTEMS.md`
 - `docs/NETWORK_BENCHMARK.md`
 - `docs/UNITY_HOST.md`
+- `docs/ROUND_1.md`
 - `docs/ROUND_2.md`
 - `docs/ROUND_3.md`
 
@@ -215,8 +216,8 @@ After each major task, report:
 
 ## Current Phase
 
-**Phases 1–6 are complete. Phase 7A (Round 2) and Phase 7B (Round 3) are
-complete.**
+**Phases 1–6 are complete. Phase 7A (Round 2), Phase 7B (Round 3) and
+Phase 7C (Round 1) are complete.**
 
 - Phase 1 — Project Foundation
 - Phase 2 — Protocol + Generic Game State
@@ -226,8 +227,9 @@ complete.**
 - Phase 6 — Shared Systems (`docs/SHARED_SYSTEMS.md`)
 - Phase 7A — Round 2, "Shake Up Yuhself!" (`docs/ROUND_2.md`)
 - Phase 7B — Round 3 (`docs/ROUND_3.md`)
+- Phase 7C — Round 1, "Nah, That Too Easy!" (`docs/ROUND_1.md`)
 
-Next is **Phase 7C** from `docs/DEVELOPMENT_ROADMAP.md`.
+Next is **Phase 7D** from `docs/DEVELOPMENT_ROADMAP.md`.
 **Do not begin it without the project owner asking.**
 
 Do not jump ahead to full gameplay.
@@ -245,6 +247,25 @@ supplies those from locked rules — not from the engine's shape.
 
 The mid-game **Host disconnect** rule is still open: connection loss is recorded
 and play is left exactly as it was.
+
+### Phase 7C leaves these deliberately undecided
+
+Round 1 is implemented and **fully locked** (`GAME_RULES_LOCKED.md` §11, D-030,
+D-032). Two totals are kept strictly separate — BB is the game's score, Round 1
+points decide only the Round 1 winner — and the correct answer is revealed only
+after grading, Host review and any retry complete.
+
+Still undecided, and not to be invented:
+
+- **Bacchanal cards in the Round 1 sudden-death tiebreaker**
+  (`OPEN_RULES.md` §14). No locked source addresses them, so they are
+  **unavailable** there rather than given a guessed rule.
+- **An AI provider.** The repository has no provider decision and Phase 7C did
+  not make one by default. `AnswerSemanticJudge` is vendor-neutral, the default
+  refuses to guess, and tests use a deterministic stub. Round 1 is fully
+  playable with no AI — the Host simply rules more often.
+- **A production content pipeline.** The `Round1ContentSource` seam exists and
+  TEST content fills it; the Host never types a question (§13).
 
 ### Phase 7B leaves these deliberately undecided
 
@@ -281,8 +302,9 @@ Still undecided, and not to be invented:
 - **Clue, Extra Time and Second Chance during a physical challenge.** What they
   would mean is undefined, so they are left disabled for Round 2 rather than
   guessed. They are still sellable, and still work where they do apply.
-- **Round 1.** It is not implemented, and no production rule lets a game skip it.
-  Round 2 is reached by a development-gated entry only.
+- **Round 1.** Implemented in Phase 7C (`docs/ROUND_1.md`). Round 2 is still
+  reached by a development-gated entry; wiring Round 1's completion into Round 2
+  is Phase 7D's work.
 - **Round 3.** Round 2 stops at `ROUND_COMPLETE`.
 - **A physical-challenge pause rule.** Round 2 marks nobody an active player, so
   a phone that sleeps mid-challenge does not stop the game (D-021).
@@ -296,19 +318,19 @@ defined except the Clash's locked 3 seconds.
 
 The generic wager is a primitive with **no Family Feud board**, deliberately.
 
-### Standing note on Maco! (OPEN_RULES.md §7) — NOW RESOLVED
+### Standing note on Maco! (OPEN_RULES.md §7) — RESOLVED AND IMPLEMENTED
 
-**D-030: Maco! is legal in Round 1 trivia, and only there.** The deferral that
-stood since Phase 4 is closed.
+**D-030: Maco! is legal in Round 1 trivia, and only there.** Phase 7C added the
+`CARD_ELIGIBILITY.ROUND1_TRIVIA` entry, and the Phase 6 tests that pinned the
+open rule were **inverted rather than deleted** — they now pin the resolved
+value.
 
-**The code has not caught up, deliberately.** `CARD_ELIGIBILITY.ROUND1_TRIVIA`
-still has no MACO entry, because Round 1 is not implemented. When it is built:
-
-- add `MACO` to that row — `CARDS_WITHOUT_LEGAL_CHALLENGE` empties itself,
-- the Phase 6 test asserting Maco is unplayable **will fail**. That failure is
-  the signal to update it, not a regression.
-
-Until then the card is still dealt and still unplayable, exactly as before.
+**A consequence worth knowing.** The same decision removed Gimme Dat! and Doh
+Know from Round 1, and no other locked row lists them, so
+`CARDS_WITHOUT_LEGAL_CHALLENGE` is now `['GIMME_DAT', 'DOH_KNOW']` rather than
+empty. That is a real result of Round 1 dropping individually assigned
+questions, not an oversight. Family Feud and Round 4 may give them a row; until
+then they are dealt and held, unplayable, exactly as Maco! was.
 
 ### Standing note on Partner, I Sorry (OPEN_RULES.md §12)
 

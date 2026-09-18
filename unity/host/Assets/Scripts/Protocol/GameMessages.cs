@@ -202,11 +202,17 @@ namespace BrainsAndBacchanal.Protocol
         /// <summary>Round 3 progression. Phase 7B. Null in every other round.</summary>
         public Round3StateView round3;
 
+        /// <summary>Round 1 progression. Phase 7C. Null in every other round.</summary>
+        public Round1StateView round1;
+
         /// <summary>Whether Round 2 is the round being played right now.</summary>
         public bool InRound2 => round2 != null && round2.Exists;
 
         /// <summary>Whether Round 3 is the round being played right now.</summary>
         public bool InRound3 => round3 != null && round3.Exists;
+
+        /// <summary>Whether Round 1 is the round being played right now.</summary>
+        public bool InRound1 => round1 != null && round1.Exists;
     }
 
     /// <summary>One entry in the BB history. Host-only.</summary>

@@ -724,6 +724,9 @@ namespace BrainsAndBacchanal
                 GUILayout.Space(24);
                 // Phase 7B — Round 3.
                 DrawRound3Panel(snapshot, game);
+                GUILayout.Space(24);
+                // Phase 7C — Round 1, the first round actually played.
+                DrawRound1Panel(snapshot, game);
                 GUILayout.EndHorizontal();
             }
 
@@ -997,6 +1000,18 @@ namespace BrainsAndBacchanal
         {
             fontSize = 18,
             fontStyle = FontStyle.Bold,
+        };
+
+        /// <summary>
+        /// A wrapping label style.
+        ///
+        /// Round 1 shows free text — a question prompt and whatever a team
+        /// typed — and neither fits one line at panel width.
+        /// </summary>
+        private static GUIStyle _wrapStyle;
+        private static GUIStyle WrapStyle => _wrapStyle ??= new GUIStyle(GUI.skin.label)
+        {
+            wordWrap = true,
         };
 
         private static GUIStyle _codeStyle;

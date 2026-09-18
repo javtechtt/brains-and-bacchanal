@@ -142,20 +142,26 @@ Still unclear if payer has less than 500:
 
 Do not invent.
 
-## 13. Round 1 — FORGIVE MEH! Retry Window
+## 13. Round 1 — FORGIVE MEH! Retry Window — ✅ RESOLVED
 
-Round 1 is otherwise fully locked (`GAME_RULES_LOCKED.md` §11): 60 seconds per
-question, retry available after a wrong first answer, one retry maximum shared
-with the Market's Second Chance, and the correct answer revealed only after the
-retry flow completes.
+**Resolved by the project owner: a fresh 10-second window.** It starts when the
+Host opens the retry, not when the question closed, so a team that spent 58
+seconds on its first answer still gets the full 10.
 
-**Still open:** how long the nominated player gets for that retry.
+Round 1 is now **fully locked**. See `GAME_RULES_LOCKED.md` §11 and
+`DECISION_LOG.md` D-032.
 
-- the remainder of the original 60 seconds?
-- a fresh, shorter window?
-- and if a fresh window, how long?
+## 14. Round 1 Sudden-Death Tiebreaker — Card Compatibility
 
-Do not invent one. Keep it configuration-driven.
+The tiebreaker itself is locked (`GAME_RULES_LOCKED.md` §11, D-032): 30 seconds,
+same question to every still-tied team, no BB and no Round 1 points.
+
+**Still open, and deliberately:** whether any Bacchanal card may be played
+during it. No locked source addresses tiebreaker cards, so rather than invent a
+rule, cards are **unavailable** there and the question is recorded here.
+
+This is not urgent — it only matters if a Round 1 tie actually happens and a
+team wants to play a card into the tiebreak.
 
 ## Development Guidance
 

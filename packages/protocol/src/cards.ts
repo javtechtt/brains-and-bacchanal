@@ -24,11 +24,9 @@ import type { ChallengeId, ServerTimestamp, TeamId } from './ids.js';
 /**
  * The seven Bacchanal card types. GAME_RULES_LOCKED.md §2.
  *
- * MACO IS PRESENT HERE ON PURPOSE. OPEN_RULES.md §7 leaves its challenge
- * compatibility unresolved, and the owner's standing instruction is to leave it
- * out for now without deleting it. Modelling the card while giving it no legal
- * challenge is exactly that: the type exists, so a later decision has something
- * to attach to, and `CARD_ELIGIBILITY` never lists it.
+ * MACO IS NOW LEGAL, IN ROUND 1 ONLY. D-030 closed OPEN_RULES.md §7, and Phase
+ * 7C added the `ROUND1_TRIVIA` entry that `CARDS_WITHOUT_LEGAL_CHALLENGE` was
+ * built to notice. The card is no longer held-but-unplayable.
  */
 export const BACCHANAL_CARD_TYPES = [
   'STEUPS',
@@ -164,18 +162,20 @@ export type CardChallengeKind = (typeof CARD_CHALLENGE_KINDS)[number];
  * Transcribed exactly. Nothing is added, and the absences are as deliberate as
  * the entries:
  *
- *   - MACO appears NOWHERE. OPEN_RULES.md §7: "Maco! appears nowhere in this
- *     approved table. That is intentionally left open." Giving it a challenge
- *     here — even a plausible one — would answer an open rule. It stays absent
- *     until the owner decides.
- *   - SUDDEN_DEATH is empty because §19 bars cards entirely.
+ *   - MACO is legal in ROUND1_TRIVIA, and only there (D-030). Round 1's
+ *     simultaneous format is what gives the card a meaning: there is a submitted
+ *     opponent answer to look at.
+ *   - GIMME_DAT and DOH_KNOW were REMOVED from ROUND1_TRIVIA by D-030. Both act
+ *     on an individually assigned question, and Round 1 no longer assigns one —
+ *     every team answers the same question at the same time (§11).
+ *   - SUDDEN_DEATH is empty because §21 bars cards entirely.
  *   - DOUBLE_IT is absent from FAMILY_FEUD_Q4_Q5 because those questions are
  *     already doubled and multipliers never stack (§3).
  */
 export const CARD_ELIGIBILITY: Readonly<
   Record<CardChallengeKind, readonly BacchanalCardType[]>
 > = {
-  ROUND1_TRIVIA: ['GIMME_DAT', 'DOUBLE_IT', 'DOH_KNOW', 'ALLYUH_HELP_ME', 'FORGIVE_MEH'],
+  ROUND1_TRIVIA: ['MACO', 'DOUBLE_IT', 'ALLYUH_HELP_ME', 'FORGIVE_MEH'],
   ROUND2_PHYSICAL: ['DOUBLE_IT'],
   THINK_FAST: ['STEUPS', 'DOUBLE_IT', 'FORGIVE_MEH'],
   GUESS_THE_LOGO: ['DOUBLE_IT'],
@@ -203,10 +203,10 @@ export function isCardEligible(
 /**
  * Whether a card type has ANY legal challenge at all.
  *
- * True for six of the seven cards. False for MACO, and that is the point: the
- * unresolved open rule shows up as a queryable fact rather than as a special
- * case somewhere in the play path. A UI asks this to render the card as held
- * but never playable, and a test asserts it to prove the rule stayed open.
+ * Now true for all seven. It was false for MACO while OPEN_RULES.md §7 stood
+ * open, which is why the question is asked here rather than special-cased in the
+ * play path: resolving the rule (D-030) changed one table entry and this
+ * followed. Kept because the same situation can recur for a future card.
  */
 export function cardHasAnyLegalChallenge(cardType: BacchanalCardType): boolean {
   return CARD_CHALLENGE_KINDS.some((kind) => isCardEligible(cardType, kind));
@@ -215,9 +215,16 @@ export function cardHasAnyLegalChallenge(cardType: BacchanalCardType): boolean {
 /**
  * Card types that currently have no legal challenge anywhere.
  *
- * Today: exactly `['MACO']`, because of OPEN_RULES.md §7. Derived rather than
- * written down, so that if the owner resolves §7 by adding MACO to the table,
- * this empties itself and nothing else has to be found and changed.
+ * Today: `['GIMME_DAT', 'DOH_KNOW']`.
+ *
+ * It held `['MACO']` until D-030, which swapped the membership entirely: Maco
+ * gained Round 1, and Gimme Dat! and Doh Know LOST it, leaving those two with no
+ * legal row anywhere. That is a genuine consequence of Round 1 dropping
+ * individually assigned questions, not an oversight — Family Feud and Round 4
+ * may yet give them one, and until then they are dealt and held exactly as Maco
+ * was.
+ *
+ * Derived rather than written down, which is why the swap needed no hunting.
  */
 export const CARDS_WITHOUT_LEGAL_CHALLENGE: readonly BacchanalCardType[] =
   BACCHANAL_CARD_TYPES.filter((type) => !cardHasAnyLegalChallenge(type));
@@ -230,11 +237,10 @@ export const CARDS_WITHOUT_LEGAL_CHALLENGE: readonly BacchanalCardType[] =
  * The pool each starting card is drawn from. GAME_RULES_LOCKED.md §2 — one
  * random card from each of the three categories.
  *
- * MACO IS IN THE DISRUPTION POOL. Phase 6 spec §6 is explicit: "Do NOT remove
- * Maco! from the starting hand unless the owner explicitly changes the rule",
- * and "it may exist in starting hands... it must remain safely held". A team
- * that draws it holds a card it cannot play, which is a consequence of the open
- * rule and not a bug to be engineered away.
+ * MACO IS IN THE DISRUPTION POOL, and since D-030 it is playable — in Round 1
+ * trivia, and only there (§6). Phase 6 kept it dealt while it had no legal
+ * challenge rather than engineering it out of the deck, which is why resolving
+ * the rule needed no change here at all.
  */
 export const STARTING_HAND_POOLS: readonly (readonly BacchanalCardType[])[] = [
   cardsInCategory('DISRUPTION'),

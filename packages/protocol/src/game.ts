@@ -10,6 +10,7 @@ import type { GamePhase } from './lifecycle.js';
 import type { ChallengeStatus, PauseReason } from './models.js';
 import type { LobbyPlayer, LobbyRoom, TeamMode } from './room.js';
 import type { Round2StateView } from './round2.js';
+import type { Round1StateView } from './round1.js';
 import type { Round3StateView } from './round3.js';
 import type { HostSharedSystemsView, PlayerSharedSystemsView } from './shared-systems.js';
 
@@ -424,6 +425,14 @@ export interface GameSessionView {
    * another's state by accident — the same reasoning as `round2`.
    */
   readonly round3: Round3StateView | null;
+  /**
+   * Round 1 progression. Phase 7C. Null in every other round.
+   *
+   * Its own field for the same reason as `round2` and `round3`. Scoped per
+   * viewer by the room, which knows who is asking — the answer text, the
+   * nominee role and any Maco! viewing all depend on that.
+   */
+  readonly round1: Round1StateView | null;
 }
 
 /** Why the game is paused and where it returns to. */

@@ -51,3 +51,6 @@ export * from './shared-systems.js';
 export * from './round2.js';
 export * from './round3.js';
 export * from './game-engine.js';
+export * from './round1.js';
+export * from './round1-content.js';
+export * from './round1-grading.js';

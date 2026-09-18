@@ -235,7 +235,10 @@ describe('Bacchanal Immunity', () => {
     // §8 / Phase 6 spec §29 — "cancel Bacchanal used against the protected team,
     // immunity is consumed, attacking team keeps its Bacchanal card, attacking
     // card has no effect."
-    const seed = seedWhere((h) => h.TEAM_A!.includes('GIMME_DAT'));
+    // MACO rather than GIMME_DAT: this test is about immunity, and it needs an
+    // attacking card that is actually legal in the open challenge. D-030 swapped
+    // which Disruption card that is — Maco gained Round 1, Gimme Dat! lost it.
+    const seed = seedWhere((h) => h.TEAM_A!.includes('MACO'));
     const { systems, clock } = setup(seed);
     systems.cards.deal(TEAMS);
     systems.advantages.grant({
@@ -245,10 +248,10 @@ describe('Bacchanal Immunity', () => {
     });
     systems.openCardWindow(CHALLENGE, 'ROUND1_TRIVIA');
 
-    const gimme = systems.cards.handOf(TEAM_A).find((c) => c.cardType === 'GIMME_DAT')!;
+    const maco = systems.cards.handOf(TEAM_A).find((c) => c.cardType === 'MACO')!;
     systems.playCard({
       teamId: TEAM_A,
-      cardInstanceId: gimme.cardInstanceId,
+      cardInstanceId: maco.cardInstanceId,
       targetTeamId: TEAM_B,
       challengeId: CHALLENGE,
       paused: false,
@@ -266,7 +269,7 @@ describe('Bacchanal Immunity', () => {
     }
 
     // The attacking card is BACK IN HAND, not consumed.
-    expect(systems.cards.card(gimme.cardInstanceId)?.status).toBe('HELD');
+    expect(systems.cards.card(maco.cardInstanceId)?.status).toBe('HELD');
     // The immunity is spent.
     expect(systems.advantages.consumeImmunity(TEAM_B)).toBeNull();
   });

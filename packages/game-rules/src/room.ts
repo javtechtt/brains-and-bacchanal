@@ -1,6 +1,7 @@
 import {
   asSequenceNumber,
   asServerTimestamp,
+  asPlayerId,
   asTeamId,
   DEFAULT_TEAM_LABELS,
   err,
@@ -15,6 +16,11 @@ import {
   ROOM_EVENTS,
   ROOM_INTENTS,
   ROUND2_INTENTS,
+  ROUND1_EVENTS,
+  ROUND1_INTENTS,
+  isRound1Difficulty,
+  ROUND1_CARD_CHALLENGE_KIND,
+  type Round1Verdict,
   ROUND3_INTENTS,
   isRound3ChallengeType,
   SHARED_INTENTS,
@@ -46,6 +52,16 @@ import {
 import type { Clock } from './clock.js';
 import { EventLog } from './event-log.js';
 import { createTestContentSource, type Round3ContentSource } from './round3-content.js';
+import {
+  createTestRound1ContentSource,
+  validateQuestionSet,
+  type Round1ContentSource,
+} from './round1-content.js';
+import {
+  gradeDeterministic,
+  UnavailableSemanticJudge,
+  type AnswerSemanticJudge,
+} from './round1-grading.js';
 import { GameEngine, type EngineChange, type StartingTeam } from './game-engine.js';
 import { IntentRegistry } from './idempotency.js';
 
@@ -112,6 +128,24 @@ export interface RoomOptions {
    * supplies its own; the Host never types content either way.
    */
   readonly contentSource?: Round3ContentSource;
+  /**
+   * Where Round 1 trivia comes from. GAME_RULES_LOCKED.md §11, §13.
+   *
+   * Defaults to the TEST source during development. Separate from the Round 3
+   * source because the two carry different shapes: a Round 1 item holds a
+   * canonical answer (the round is machine-graded), and a Round 3 item never
+   * does (the Host judges).
+   */
+  readonly round1ContentSource?: Round1ContentSource;
+  /**
+   * The AI semantic judge for genuinely ambiguous Round 1 answers.
+   *
+   * Defaults to one that refuses to guess, which is every environment today —
+   * the project has made no AI provider decision, so Phase 7C ships no vendor
+   * adapter. With no judge configured the game plays normally; the Host simply
+   * rules on more answers.
+   */
+  readonly semanticJudge?: AnswerSemanticJudge;
 }
 
 /** Result of handling one intent: a reply, events to broadcast, private sends. */
@@ -139,6 +173,25 @@ export class Room {
   readonly #options: RoomOptions;
   /** Round 3 content. One per room, so cursors never leak between games. */
   readonly #content: Round3ContentSource;
+  /** Round 1 content. One per room, so cursors never leak between games. */
+  readonly #round1Content: Round1ContentSource;
+  readonly #judge: AnswerSemanticJudge;
+  /**
+   * Answers waiting on the AI judge.
+   *
+   * ================== WHY A QUEUE AND NOT AN AWAIT ==================
+   * `Room` is entirely synchronous, deliberately: every intent handler returns
+   * a decided outcome, which is what makes the event sequence and the
+   * idempotency registry straightforward to reason about. Making it async to
+   * accommodate one optional AI call would reshape the whole class.
+   *
+   * So the deterministic layers grade INLINE — which handles the overwhelming
+   * majority of answers — and only a genuinely ambiguous one is queued here.
+   * The judge resolves it off to the side and the result lands on a later tick,
+   * exactly as timer and Clash expiry already do.
+   * ==================================================================
+   */
+  readonly #pendingJudgements = new Map<string, Round1Verdict>();
   /**
    * The game. Exists from room creation but does nothing until START_GAME,
    * so there is no second object to create — and no window in which a game
@@ -159,6 +212,8 @@ export class Room {
   constructor(options: RoomOptions) {
     this.#options = options;
     this.#content = options.contentSource ?? createTestContentSource();
+    this.#round1Content = options.round1ContentSource ?? createTestRound1ContentSource();
+    this.#judge = options.semanticJudge ?? new UnavailableSemanticJudge();
     this.#clock = options.clock;
     this.#log = new EventLog(options.roomId, options.clock);
     this.#createdAt = options.clock.now();
@@ -324,6 +379,13 @@ export class Room {
         // the secrecy boundary lives in one place (shared-systems.ts) and a new
         // field cannot be added to a snapshot without passing through it.
         shared: this.#game.started ? this.#game.shared.hostView() : null,
+        // Phase 7C — the Host sees every submitted answer, because the Host
+        // grades them (spec §14). The canonical answer still appears only once
+        // the question is revealed.
+        game:
+          base.game === null
+            ? null
+            : { ...base.game, round1: this.#game.round1View(null, null, true) },
       };
       return hostSnapshot;
     }
@@ -352,7 +414,14 @@ export class Room {
       game:
         base.game === null
           ? null
-          : { ...base.game, round3: this.#game.round3View(teamId) },
+          : {
+              ...base.game,
+              round3: this.#game.round3View(teamId),
+              // Phase 7C — scoped to THIS player. Their own team's submitted
+              // answer, their nominee role, and a Maco! viewing if they are the
+              // one entitled to it. Nobody else's answer text travels here.
+              round1: this.#game.round1View(teamId, playerId),
+            },
       // Phase 6. Scoped to the caller's OWN team — a player with no team gets
       // null rather than a view of someone else's, and an unidentified
       // connection lands here too (teamId is null), so the narrow path is also
@@ -546,6 +615,54 @@ export class Room {
       }
     }
 
+    // Phase 7C: Round 1's own deadlines, polled the same way.
+    //
+    // A 60-second question that runs out CLOSES and grades (§11: "when 60
+    // seconds expires, lock remaining normal submissions, grade the submitted
+    // answers"). A team that never submitted is simply ungraded — D-022 still
+    // holds, because expiry decides no VERDICT; it only ends the window.
+    if (this.#game.round1QuestionWindowExpired()) {
+      const closed = this.#game.closeRound1Question();
+      if (closed.ok) {
+        events.push(this.#log.append(closed.value.type, { kind: 'server' }, closed.value.payload));
+        events.push(...this.#gradeRound1Pending());
+      }
+    }
+
+    // A retry window that runs out closes without an answer. §11 — the retry is
+    // one final opportunity, so letting it lapse simply ends it.
+    if (this.#game.round1RetryWindowExpired()) {
+      this.#game.round1?.closeRetries();
+    }
+
+    // Grade any ungraded answer on the current question, however its window
+    // closed — expiry, or the Host closing it early. Grading must not depend on
+    // WHICH path ended the window, or an early close strands the question
+    // ungraded and it can never be revealed.
+    if ((this.#game.round1?.pendingGrading().length ?? 0) > 0) {
+      events.push(...this.#gradeRound1Pending());
+    }
+
+    // A tiebreak window that runs out closes and grades. D-032.
+    if (this.#game.round1?.tiebreakWindowExpired() === true) {
+      this.#game.round1.closeTiebreakAttempt();
+    }
+
+    // Grade any ungraded tiebreak answer, however the attempt was closed —
+    // by the window running out, or by the Host closing it early once every
+    // tied team has answered. Grading has to happen on BOTH paths or the
+    // attempt can never resolve.
+    if ((this.#game.round1?.pendingTiebreakGrading().length ?? 0) > 0) {
+      events.push(...this.#gradeRound1Pending());
+    }
+
+    // An expired Maco! viewing is dropped so a reconnect cannot revive it
+    // (spec §8, §16).
+    this.#game.round1?.clearExpiredMaco();
+
+    // Verdicts the AI judge returned since the last tick.
+    events.push(...this.#applyRound1Judgements());
+
     // Phase 7B: the rock-paper-scissors reveal, observed for the same reason.
     // It fires as soon as the last tied team locks a choice, so the reveal is
     // simultaneous rather than triggered by whoever happened to act last.
@@ -709,6 +826,28 @@ export class Room {
         return this.#submitRpsChoice(connectionId, intent);
       case ROUND3_INTENTS.DEV_START_ROUND3:
         return this.#devStartRound3(connectionId, intent);
+
+      // --- Round 1. Phase 7C. -------------------------------------------
+      case ROUND1_INTENTS.NOMINATE_ANSWERER:
+        return this.#nominateAnswerer(connectionId, intent);
+      case ROUND1_INTENTS.HOST_START_ROUND1:
+        return this.#startRound1Questions(connectionId, intent);
+      case ROUND1_INTENTS.HOST_NEXT_ROUND1_QUESTION:
+        return this.#nextRound1Question(connectionId, intent);
+      case ROUND1_INTENTS.SUBMIT_ROUND1_ANSWER:
+        return this.#submitRound1Answer(connectionId, intent);
+      case ROUND1_INTENTS.HOST_CLOSE_ROUND1_QUESTION:
+        return this.#closeRound1Question(connectionId, intent);
+      case ROUND1_INTENTS.HOST_RULE_ROUND1_ANSWER:
+        return this.#ruleRound1Answer(connectionId, intent);
+      case ROUND1_INTENTS.HOST_OPEN_ROUND1_RETRY:
+        return this.#openRound1Retry(connectionId, intent);
+      case ROUND1_INTENTS.HOST_REVEAL_ROUND1_ANSWER:
+        return this.#revealRound1Answer(connectionId, intent);
+      case ROUND1_INTENTS.HOST_START_ROUND1_TIEBREAK:
+        return this.#startRound1Tiebreak(connectionId, intent);
+      case ROUND1_INTENTS.DEV_START_ROUND1:
+        return this.#devStartRound1(connectionId, intent);
 
       default:
         return this.#reject(rejection('INVALID_REQUEST', 'Unknown intent type.', { type: intent.type }));
@@ -1331,7 +1470,37 @@ export class Room {
       if (entry.seq === null) this.#game.attachLedgerSeq(entry.entryId, event.seq);
     }
 
-    return { ack: ok({ seq: event.seq }), broadcast: [event], direct: [], closeConnections: [] };
+    const events = [event];
+
+    // ============ ROUND 1 IS PART OF THE REAL PROGRESSION ============
+    // Phase 7C spec §18 — "Integrate Round 1 into the actual production game
+    // progression. Do not leave it only as a DEV entry point."
+    //
+    // START_GAME already enters ROUND_INTRO at roundIndex 1, so Round 1 begins
+    // HERE rather than waiting for a Host button. The round opens in its
+    // `nominating` phase, which is exactly what §11 requires before any question
+    // is asked. DEV_START_ROUND1 remains for isolated testing.
+    //
+    // A content problem refuses the ROUND, not the game: the Host is told, and
+    // the lobby is still standing.
+    const began = this.#beginRound1();
+    if (began.ok) {
+      events.push(
+        this.#log.append(
+          began.value.type,
+          { kind: 'server' },
+          began.value.payload,
+        ),
+      );
+    }
+
+    const last = events[events.length - 1];
+    return {
+      ack: ok({ seq: last === undefined ? event.seq : last.seq }),
+      broadcast: events,
+      direct: [],
+      closeConnections: [],
+    };
   }
 
   /**
@@ -2238,6 +2407,582 @@ export class Room {
     };
   }
 
+  // -------------------------------------------------------------------------
+  // Round 1. Phase 7C. GAME_RULES_LOCKED.md §11, D-030, D-032.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Nominate a team's answerer for one difficulty. §11.
+   *
+   * A PLAYER intent, and the team comes from the CONNECTION — a phone cannot
+   * nominate for another team by naming it. The Host may also nominate on a
+   * team's behalf, which is how a table with one shared phone gets set up.
+   */
+  #nominateAnswerer(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const difficulty = readString(intent.payload, 'difficulty');
+    if (difficulty === null || !isRound1Difficulty(difficulty)) {
+      return this.#reject(
+        rejection('INVALID_REQUEST', 'Missing or unknown difficulty.', {
+          difficulty: difficulty ?? 'none',
+        }),
+      );
+    }
+
+    const role = this.roleOf(connectionId);
+
+    // The Host nominates by naming both the team and the player.
+    if (role.kind === 'host') {
+      const teamId = readString(intent.payload, 'teamId');
+      const playerId = readString(intent.payload, 'playerId');
+      if (teamId === null || playerId === null) {
+        return this.#reject(
+          rejection('INVALID_REQUEST', 'The Host must name a team and a player.'),
+        );
+      }
+      const outcome = this.#game.nominateRound1Answerer({
+        teamId: asTeamId(teamId),
+        difficulty,
+        playerId: asPlayerId(playerId),
+      });
+      if (!outcome.ok) return this.#reject(outcome.error);
+      return this.#publish(outcome.value, intent);
+    }
+
+    const team = this.#requireTeam(connectionId);
+    if (!team.ok) return this.#reject(team.error);
+    if (role.kind !== 'player') {
+      return this.#reject(rejection('UNAUTHORIZED_ACTOR', 'Only a joined player can do that.'));
+    }
+
+    // A player may nominate any TEAMMATE, including themselves — teams sort
+    // this out at the table. The engine checks membership.
+    const named = readString(intent.payload, 'playerId');
+    const playerId = named === null ? role.playerId : asPlayerId(named);
+
+    const outcome = this.#game.nominateRound1Answerer({
+      teamId: team.value,
+      difficulty,
+      playerId,
+    });
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /** Host closes nominations and starts the questions. §11. */
+  #startRound1Questions(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const outcome = this.#game.startRound1Questions();
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * Host reveals the next question.
+   *
+   * The room prepares the engine challenge and the ROOM supplies the content,
+   * because only the room holds the content source — the same split Round 3
+   * uses.
+   */
+  #nextRound1Question(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    // ============ THE ROUND DRIVES THE PHASES, NOT THE HOST ============
+    // Round 1 asks fifteen questions, and making the Host walk
+    // CHALLENGE_INTRO -> ACTIVE_PLAY -> RESULT by hand fifteen times would be
+    // fifteen chances to strand the game in the wrong phase mid-party.
+    //
+    // So ONE Host action advances the phases through the same transition table
+    // everything else uses — nothing here assigns a phase directly, and an
+    // illegal move is still refused by the state machine.
+    // ===================================================================
+    const phase = this.#game.sessionView()?.phase ?? null;
+    if (phase === 'ROUND_INTRO' || phase === 'RESULT' || phase === 'MARKET') {
+      const moved = this.#game.advancePhase('CHALLENGE_INTRO');
+      if (!moved.ok) return this.#reject(moved.error);
+    }
+
+    const prepared = this.#game.prepareChallenge({
+      challengeType: ROUND1_CHALLENGE_TYPE,
+    });
+    if (!prepared.ok) return this.#reject(prepared.error);
+
+    const events: EventEnvelope[] = [
+      this.#log.append(
+        prepared.value.type,
+        { kind: 'host', sessionId: '' as never },
+        prepared.value.payload,
+      ),
+    ];
+
+    const started = this.#game.startChallenge();
+    if (started.ok) {
+      events.push(
+        this.#log.append(
+          started.value.type,
+          { kind: 'host', sessionId: '' as never },
+          started.value.payload,
+        ),
+      );
+    }
+
+    const challengeId = this.#game.challengeView()?.challengeId ?? null;
+    if (challengeId === null) {
+      return this.#reject(rejection('WRONG_STATE', 'No challenge to attach the question to.'));
+    }
+
+    const revealed = this.#game.revealRound1Question(challengeId);
+    if (!revealed.ok) return this.#reject(revealed.error);
+
+    // The card window opens with the question, so Maco!, Double It!, Allyuh
+    // Help Me! and Forgive Meh! are legal for exactly this question (§6).
+    this.#game.shared.openCardWindow(challengeId, ROUND1_CARD_CHALLENGE_KIND);
+
+    events.push(
+      this.#log.append(
+        revealed.value.type,
+        { kind: 'host', sessionId: '' as never },
+        revealed.value.payload,
+        intent.intentId,
+      ),
+    );
+
+    this.#touch();
+    const last = events[events.length - 1];
+    return {
+      ack: ok({ seq: last === undefined ? this.#log.latestSeq() : last.seq }),
+      broadcast: events,
+      direct: [],
+      closeConnections: [],
+    };
+  }
+
+  /**
+   * The nominated player submits their team's answer. PLAYER intent.
+   *
+   * THE TEAM AND PLAYER BOTH COME FROM THE CONNECTION. Spec §15 — "a
+   * non-nominated player must not be able to bypass UI restrictions through the
+   * protocol", and the only way to guarantee that is to never read an identity
+   * from the payload. The engine then checks that this player is the nominee.
+   */
+  #submitRound1Answer(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const role = this.roleOf(connectionId);
+    if (role.kind !== 'player') {
+      return this.#reject(rejection('UNAUTHORIZED_ACTOR', 'Only a joined player can answer.'));
+    }
+    const team = this.#requireTeam(connectionId);
+    if (!team.ok) return this.#reject(team.error);
+
+    const answer = readString(intent.payload, 'answer');
+    if (answer === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing answer.'));
+    }
+
+    const round = this.#game.round1;
+    const inTiebreak = round !== null && round.phase === 'tiebreak';
+
+    const outcome = inTiebreak
+      ? this.#game.submitRound1TiebreakAnswer({
+          teamId: team.value,
+          playerId: role.playerId,
+          answer,
+        })
+      : this.#game.submitRound1Answer({
+          teamId: team.value,
+          playerId: role.playerId,
+          answer,
+        });
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * Host closes the answer window and grades what came in.
+   *
+   * Deterministic grading runs INLINE here and decides the overwhelming
+   * majority of answers. Anything genuinely ambiguous is queued for the AI
+   * judge and resolved on a later tick — see `#pendingJudgements`.
+   */
+  #closeRound1Question(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const closed = this.#game.closeRound1Question();
+    if (!closed.ok) return this.#reject(closed.error);
+
+    const events: EventEnvelope[] = [
+      this.#log.append(
+        closed.value.type,
+        { kind: 'host', sessionId: '' as never },
+        closed.value.payload,
+        intent.intentId,
+      ),
+    ];
+
+    events.push(...this.#gradeRound1Pending());
+
+    this.#touch();
+    const last = events[events.length - 1];
+    return {
+      ack: ok({ seq: last === undefined ? this.#log.latestSeq() : last.seq }),
+      broadcast: events,
+      direct: [],
+      closeConnections: [],
+    };
+  }
+
+  /**
+   * Grade every ungraded answer on the current question.
+   *
+   * Runs the deterministic layers synchronously. An answer they cannot decide
+   * is handed to the judge asynchronously and stored in `#pendingJudgements`;
+   * until it resolves the answer simply has no ruling, and the Host can rule on
+   * it at any time — a Host ruling always wins.
+   */
+  #gradeRound1Pending(): EventEnvelope[] {
+    const events: EventEnvelope[] = [];
+    const round = this.#game.round1;
+    if (round === null) return events;
+
+    const inTiebreak = round.phase === 'tiebreak';
+    const item = inTiebreak ? round.currentTiebreakItem() : round.currentItem();
+    if (item === null) return events;
+
+    const pending = inTiebreak
+      ? round.pendingTiebreakGrading().map((x) => ({ ...x, isRetry: false }))
+      : round.pendingGrading();
+
+    for (const entry of pending) {
+      const input = {
+        prompt: item.prompt,
+        canonicalAnswer: item.canonicalAnswer,
+        ...(item.acceptedVariants === undefined
+          ? {}
+          : { acceptedVariants: item.acceptedVariants }),
+        submittedAnswer: entry.answer,
+      };
+
+      const deterministic = gradeDeterministic(input);
+      if (deterministic !== null) {
+        if (inTiebreak) {
+          // A tiebreak ruling returns no event of its own; the attempt's
+          // resolution is what clients see (spec §12).
+          this.#game.round1?.recordTiebreakRuling({
+            teamId: entry.teamId,
+            verdict: deterministic.verdict,
+            source: deterministic.source,
+          });
+        } else {
+          const recorded = this.#game.recordRound1Ruling({
+            teamId: entry.teamId,
+            verdict: deterministic.verdict,
+            source: deterministic.source,
+            isRetry: entry.isRetry,
+          });
+          if (recorded.ok) {
+            events.push(
+              this.#log.append(recorded.value.type, { kind: 'server' }, recorded.value.payload),
+            );
+          }
+        }
+        continue;
+      }
+
+      // Genuinely ambiguous. Ask the judge off to the side; the answer lands on
+      // a later tick. Nothing blocks, and the Host may rule in the meantime.
+      this.#queueJudgement({
+        key: `${item.itemId}:${entry.teamId}:${entry.isRetry ? 'retry' : 'first'}`,
+        input,
+      });
+    }
+
+    return events;
+  }
+
+  /** Ask the judge for one ambiguous answer, off the synchronous path. */
+  #queueJudgement(request: {
+    readonly key: string;
+    readonly input: {
+      readonly prompt: string;
+      readonly canonicalAnswer: string;
+      readonly acceptedVariants?: readonly string[];
+      readonly submittedAnswer: string;
+    };
+  }): void {
+    if (this.#pendingJudgements.has(request.key)) return;
+
+    void this.#judge
+      .judge({
+        prompt: request.input.prompt,
+        canonicalAnswer: request.input.canonicalAnswer,
+        acceptedVariants: request.input.acceptedVariants ?? [],
+        submittedAnswer: request.input.submittedAnswer,
+      })
+      .then((result) => {
+        this.#pendingJudgements.set(request.key, result.verdict);
+      })
+      .catch(() => {
+        // A judge that fails means NEEDS_HOST_REVIEW, never a guess. Spec §4D.
+        this.#pendingJudgements.set(request.key, 'NEEDS_HOST_REVIEW');
+      });
+  }
+
+  /**
+   * Apply any judge verdicts that have come back. Called on the tick.
+   *
+   * A stored ruling is never overwritten here, so a Host who already ruled
+   * while the judge was thinking keeps the last word.
+   */
+  #applyRound1Judgements(): EventEnvelope[] {
+    const events: EventEnvelope[] = [];
+    if (this.#pendingJudgements.size === 0) return events;
+
+    const round = this.#game.round1;
+    if (round === null) {
+      this.#pendingJudgements.clear();
+      return events;
+    }
+
+    const inTiebreak = round.phase === 'tiebreak';
+    const item = inTiebreak ? round.currentTiebreakItem() : round.currentItem();
+    if (item === null) return events;
+
+    for (const [key, verdict] of [...this.#pendingJudgements]) {
+      const [itemId, teamId, kind] = key.split(':');
+      if (itemId !== item.itemId) {
+        // The question moved on. The verdict is stale; drop it rather than
+        // applying it to a different question.
+        this.#pendingJudgements.delete(key);
+        continue;
+      }
+
+      if (inTiebreak) {
+        this.#game.round1?.recordTiebreakRuling({
+          teamId: asTeamId(teamId ?? ''),
+          verdict,
+          source: 'semantic',
+        });
+        this.#pendingJudgements.delete(key);
+        continue;
+      }
+
+      const recorded = this.#game.recordRound1Ruling({
+        teamId: asTeamId(teamId ?? ''),
+        verdict,
+        source: 'semantic',
+        isRetry: kind === 'retry',
+      });
+      this.#pendingJudgements.delete(key);
+
+      if (recorded.ok) {
+        events.push(
+          this.#log.append(recorded.value.type, { kind: 'server' }, recorded.value.payload),
+        );
+      }
+    }
+
+    return events;
+  }
+
+  /**
+   * Host rules on one answer. §4E — the Host is the final authority.
+   *
+   * A Host ruling REPLACES an automated one and is recorded as an override, so
+   * the history shows both what the machine said and what the Host decided.
+   */
+  #ruleRound1Answer(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const teamId = readString(intent.payload, 'teamId');
+    const verdict = readString(intent.payload, 'verdict');
+    if (teamId === null || (verdict !== 'CORRECT' && verdict !== 'INCORRECT')) {
+      return this.#reject(
+        rejection('INVALID_REQUEST', 'Name a team and rule CORRECT or INCORRECT.'),
+      );
+    }
+
+    const round = this.#game.round1;
+    if (round !== null && round.phase === 'tiebreak') {
+      const ruled = round.recordTiebreakRuling({
+        teamId: asTeamId(teamId),
+        verdict: verdict as Round1Verdict,
+        source: 'host',
+      });
+      if (!ruled.ok) return this.#reject(ruled.error);
+
+      const event = this.#log.append(
+        ROUND1_EVENTS.ROUND1_ANSWER_GRADED,
+        { kind: 'host', sessionId: '' as never },
+        { teamId, verdict, source: 'host', tiebreak: true, round1: round.view() },
+        intent.intentId,
+      );
+      this.#touch();
+      return { ack: ok({ seq: event.seq }), broadcast: [event], direct: [], closeConnections: [] };
+    }
+
+    const isRetry = readBoolean(intent.payload, 'isRetry') ?? false;
+    const outcome = this.#game.recordRound1Ruling({
+      teamId: asTeamId(teamId),
+      verdict: verdict as Round1Verdict,
+      source: 'host',
+      isRetry,
+    });
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /** Host opens a 10-second FORGIVE MEH! retry for one team. §11, D-032. */
+  #openRound1Retry(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const teamId = readString(intent.payload, 'teamId');
+    if (teamId === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing teamId.'));
+    }
+
+    const outcome = this.#game.openRound1Retry(asTeamId(teamId));
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * Host reveals the correct answer and finalises the scores. §11, spec §5.
+   *
+   * The reveal is LAST, and the engine refuses it while anything is ungraded or
+   * awaiting a Host ruling — so a retrying player can never be handed the
+   * answer they are about to give.
+   */
+  #revealRound1Answer(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const round = this.#game.round1;
+
+    // A tiebreak attempt resolves rather than scoring — it moves no BB and no
+    // Round 1 points (spec §12).
+    if (round !== null && round.phase === 'tiebreak') {
+      const resolved = this.#game.resolveRound1Tiebreak();
+      if (!resolved.ok) return this.#reject(resolved.error);
+      return this.#publish(resolved.value, intent);
+    }
+
+    // Resolving a challenge requires leaving ACTIVE_PLAY, the same way every
+    // other round does. HOST_REVIEW is the legal intermediate when an answer
+    // needed a ruling; RESULT is where a resolved challenge belongs.
+    const phase = this.#game.sessionView()?.phase ?? null;
+    if (phase === 'ACTIVE_PLAY') {
+      const moved = this.#game.advancePhase('HOST_REVIEW');
+      if (!moved.ok) return this.#reject(moved.error);
+    }
+
+    const outcome = this.#game.revealRound1Answer();
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    const published = this.#publishWithLedger(outcome.value.change, intent);
+    if (!published.ack.ok) return published;
+
+    const events = [...published.broadcast];
+
+    // The last question decides the round — outright, or into the tiebreak.
+    if (this.#game.round1?.questionsComplete === true) {
+      const decided = this.#game.decideRound1Winner();
+      if (decided.ok) {
+        events.push(
+          this.#log.append(
+            decided.value.type,
+            { kind: 'host', sessionId: '' as never },
+            decided.value.payload,
+          ),
+        );
+      }
+    }
+
+    const last = events[events.length - 1];
+    return {
+      ack: ok({ seq: last === undefined ? published.ack.value.seq : last.seq }),
+      broadcast: events,
+      direct: [],
+      closeConnections: [],
+    };
+  }
+
+  /** Host starts the next sudden-death tiebreak question. D-032. */
+  #startRound1Tiebreak(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const item = this.#round1Content.nextTiebreakItem();
+    if (item === null) {
+      return this.#reject(
+        rejection('ILLEGAL_ACTION', 'The content source has no more tiebreak questions.'),
+      );
+    }
+
+    const outcome = this.#game.startRound1TiebreakAttempt(item);
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * DEVELOPMENT ONLY — enter Round 1 directly.
+   *
+   * Round 1 is the FIRST round, so unlike Round 2 and Round 3 this skips
+   * nothing: it is a shortcut past the lobby ceremony, not past other rounds.
+   * Production reaches Round 1 through `START_GAME` and the normal phase flow,
+   * and `#autoBeginRound1` is what does it.
+   */
+  #devStartRound1(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    if (!this.#game.devTools) {
+      return this.#reject(
+        rejection('ILLEGAL_ACTION', 'Development controls are disabled on this server.'),
+      );
+    }
+
+    const began = this.#beginRound1();
+    if (!began.ok) return this.#reject(began.error);
+
+    this.#touch();
+    const event = this.#log.append(
+      began.value.type,
+      { kind: 'host', sessionId: '' as never },
+      began.value.payload,
+      intent.intentId,
+    );
+    return { ack: ok({ seq: event.seq }), broadcast: [event], direct: [], closeConnections: [] };
+  }
+
+  /**
+   * Validate the content and enter Round 1.
+   *
+   * The counts are checked HERE rather than inside `Round1`, because a
+   * malformed pack is a content problem and the room owns the content source.
+   * A bad pack refuses the round rather than surfacing mid-game as a missing
+   * question.
+   */
+  #beginRound1(): Result<EngineChange> {
+    const questions = this.#round1Content.questionSet();
+    const problem = validateQuestionSet(questions);
+    if (problem !== null) {
+      return err(
+        rejection('INTERNAL_ERROR', 'The Round 1 content set is not valid.', {
+          reason: problem.reason,
+          ...(problem.difficulty === undefined ? {} : { difficulty: problem.difficulty }),
+          ...(problem.found === undefined ? {} : { found: problem.found }),
+          ...(problem.expected === undefined ? {} : { expected: problem.expected }),
+        }),
+      );
+    }
+    return this.#game.beginRound1(questions);
+  }
+
   /**
    * Publish an engine change and link any ledger entries it produced.
    *
@@ -2383,6 +3128,18 @@ function readString(payload: unknown, field: string): string | null {
  * Returns `[]` for an absent field and `null` for a malformed one, so a caller
  * can tell "not supplied" from "supplied wrongly" and reject only the latter.
  */
+/**
+ * The `challengeType` a Round 1 question uses on its engine challenge.
+ *
+ * A plain string, exactly as game.ts intends — the engine has no opinion about
+ * what a round contains, and this is the round declaring its own identity.
+ */
+const ROUND1_CHALLENGE_TYPE = 'ROUND1_TRIVIA';
+
+function readBoolean(payload: unknown, field: string): boolean | null {
+  const value = readField(payload, field);
+  return typeof value === 'boolean' ? value : null;
+}
 function readStringArray(payload: unknown, field: string): string[] | null {
   const value = readField(payload, field);
   if (value === undefined || value === null) return [];

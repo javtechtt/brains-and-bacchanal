@@ -10,6 +10,9 @@ import {
   ok,
   PLUS_15_SECONDS_MS,
   rejection,
+  ROUND1_EVENTS,
+  ROUND1_ROUND_INDEX,
+  ROUND1_VALUES,
   ROUND2_CHALLENGES,
   ROUND2_EVENTS,
   ROUND2_ROUND_INDEX,
@@ -37,6 +40,11 @@ import {
   type Rejection,
   type Result,
   type RoomId,
+  type Round1ContentItem,
+  type Round1Difficulty,
+  type Round1GradeSource,
+  type Round1StateView,
+  type Round1Verdict,
   type Round2StateView,
   type Round3ContentItem,
   type Round3StateView,
@@ -46,6 +54,7 @@ import {
   type TurnOwnership,
   NO_TURN,
 } from '@bb/protocol';
+import { Round1 } from './round1.js';
 import { Round2 } from './round2.js';
 import { Round3 } from './round3.js';
 import { BbLedger } from './bb-ledger.js';
@@ -172,6 +181,8 @@ export class GameEngine {
   #round2: Round2 | null = null;
   /** Round 3 progression, once the round is entered. Null otherwise. */
   #round3: Round3 | null = null;
+  /** Round 1 progression, once the round is entered. Null otherwise. */
+  #round1: Round1 | null = null;
   /**
    * Players whose participation the CURRENT challenge requires.
    *
@@ -283,6 +294,10 @@ export class GameEngine {
       // Phase 7B. Null outside Round 3. The team-scoped variant is built by the
       // room, which knows who is asking; this default hides every RPS choice.
       round3: this.round3View(),
+      // Phase 7C. Null outside Round 1. The viewer-scoped variant is built by
+      // the room, which knows who is asking; this default hides every submitted
+      // answer and every Maco! viewing.
+      round1: this.round1View(),
     };
   }
 
@@ -953,6 +968,7 @@ export class GameEngine {
     // Phase 7B — a Round 3 item window freezes with the game too, for the same
     // reason and by the same mechanism.
     this.#round3?.pauseItemWindow();
+    this.#round1?.pauseWindows();
     // The Clash's 6-second window is a deadline like any other: a team must not
     // lose its chance to counter because someone's phone died. D-011.
     this.#shared.clash.pause();
@@ -993,6 +1009,7 @@ export class GameEngine {
     // banked and excluded from elapsed time.
     this.#timer.resume();
     this.#round3?.resumeItemWindow();
+    this.#round1?.resumeWindows();
     this.#shared.clash.resume();
 
     return ok({
@@ -1854,6 +1871,580 @@ export class GameEngine {
     });
   }
 
+
+  // -------------------------------------------------------------------------
+  // Round 1. Phase 7C.
+  //
+  // GAME_RULES_LOCKED.md §11, D-030 and D-032.
+  //
+  // TWO TOTALS, ONE CORRECT ANSWER. BB moves through the ledger exactly like
+  // every other award; Round 1 POINTS live in the `Round1` object and never
+  // touch the ledger. Round 1 is won on points, the game is won on BB, and the
+  // two can genuinely differ because BB also moves in the Market.
+  //
+  // Round 1 is also the FIRST round that marks players software-active (D-021):
+  // the nominated answerer is the only person who can submit, so their phone
+  // dropping really does stop that team.
+  // -------------------------------------------------------------------------
+
+  get round1(): Round1 | null {
+    return this.#round1;
+  }
+
+  round1View(
+    forTeam: TeamId | null = null,
+    forPlayer: PlayerId | null = null,
+    hostView = false,
+  ): Round1StateView | null {
+    return this.#round1 === null ? null : this.#round1.view(forTeam, forPlayer, hostView);
+  }
+
+  /**
+   * Enter Round 1 with a question set the CALLER has already validated.
+   *
+   * The engine never reaches for content — the room owns the content source,
+   * exactly as it does for Round 3 (§13).
+   */
+  beginRound1(questions: readonly Round1ContentItem[]): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    if (this.#roundIndex !== ROUND1_ROUND_INDEX) {
+      return err(
+        rejection('WRONG_STATE', 'The game is not on Round 1.', {
+          roundIndex: this.#roundIndex,
+          expected: ROUND1_ROUND_INDEX,
+        }),
+      );
+    }
+    if (this.#round1 !== null) {
+      return err(rejection('WRONG_STATE', 'Round 1 has already started.'));
+    }
+
+    const round = new Round1({ clock: this.#clock });
+    const began = round.begin({
+      teamIds: [...this.#teams.keys()].map((id) => asTeamId(id)),
+      questions,
+    });
+    if (!began.ok) return err(began.error);
+
+    this.#round1 = round;
+
+    return ok({
+      type: ROUND1_EVENTS.ROUND1_STARTED,
+      payload: {
+        roundIndex: ROUND1_ROUND_INDEX,
+        // ⚠ The VIEW, never the question set. The items carry canonical answers
+        // and the view has no field for one.
+        round1: round.view(),
+      },
+    });
+  }
+
+  /** Nominate one team's answerer for one difficulty. §11. */
+  nominateRound1Answerer(input: {
+    readonly teamId: TeamId;
+    readonly difficulty: Round1Difficulty;
+    readonly playerId: PlayerId;
+  }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round1;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 1 has not started.'));
+
+    if (!this.#teamHasMember(input.teamId, input.playerId)) {
+      return err(
+        rejection('ILLEGAL_ACTION', 'A nominee must be on that team.', {
+          teamId: input.teamId,
+          playerId: input.playerId,
+        }),
+      );
+    }
+
+    const nominated = round.nominate(input);
+    if (!nominated.ok) return err(nominated.error);
+
+    return ok({
+      type: ROUND1_EVENTS.ROUND1_NOMINEE_SET,
+      payload: {
+        teamId: input.teamId,
+        difficulty: input.difficulty,
+        playerId: input.playerId,
+        nominee: nominated.value,
+        nominationsComplete: round.nominationsComplete(),
+        round1: round.view(),
+      },
+    });
+  }
+
+  /** Close nominations. Refused while any team is short a nominee (§11). */
+  startRound1Questions(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round1;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 1 has not started.'));
+
+    const started = round.startQuestions();
+    if (!started.ok) return err(started.error);
+
+    return ok({
+      type: ROUND1_EVENTS.ROUND1_STARTED,
+      payload: { phase: round.phase, round1: round.view() },
+    });
+  }
+
+  /**
+   * Reveal the next question, start its 60-second window, and mark the
+   * nominated answerers active.
+   *
+   * The active-player set is refreshed HERE because it changes with the
+   * question: a Medium question needs each team's Medium nominee awake, and
+   * nobody else. D-021.
+   */
+  revealRound1Question(challengeId: ChallengeId): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round1;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 1 has not started.'));
+
+    const revealed = round.revealNextQuestion(challengeId);
+    if (!revealed.ok) return err(revealed.error);
+
+    this.#syncRound1ActivePlayers();
+
+    return ok({
+      type: ROUND1_EVENTS.ROUND1_QUESTION_REVEALED,
+      payload: {
+        challengeId,
+        question: revealed.value,
+        activePlayerIds: this.activePlayerIds(),
+        round1: round.view(),
+      },
+    });
+  }
+
+  /**
+   * Keep the active-player set matching what the round currently requires.
+   *
+   * Called whenever the answering state changes. A team that has submitted no
+   * longer needs its nominee awake, so the set SHRINKS as answers arrive —
+   * which is the behaviour that keeps a party from pausing constantly.
+   */
+  #syncRound1ActivePlayers(): void {
+    const round = this.#round1;
+    if (round === null) return;
+    // Only players still on a participating team can be marked active.
+    const wanted = round.activePlayerIds().filter((id) => this.#anyTeamHasMember(id));
+    this.#activePlayers.clear();
+    for (const playerId of wanted) this.#activePlayers.add(playerId);
+  }
+
+  /** The nominated player submits their team's answer. Final (§11). */
+  submitRound1Answer(input: {
+    readonly teamId: TeamId;
+    readonly playerId: PlayerId;
+    readonly answer: string;
+  }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round1;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 1 has not started.'));
+
+    const submitted = round.submitAnswer(input);
+    if (!submitted.ok) return err(submitted.error);
+
+    this.#syncRound1ActivePlayers();
+
+    return ok({
+      type: ROUND1_EVENTS.ROUND1_ANSWER_SUBMITTED,
+      payload: {
+        teamId: input.teamId,
+        playerId: input.playerId,
+        isRetry: submitted.value.isRetry,
+        // ⚠ THE ANSWER TEXT IS NOT IN THIS PAYLOAD. An event reaches every
+        // client, and a submitted answer belongs to its own team until the
+        // reveal. Only the fact of submitting travels.
+        activePlayerIds: this.activePlayerIds(),
+        round1: round.view(),
+      },
+    });
+  }
+
+  /** Close the answer window and move to grading. */
+  closeRound1Question(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round1;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 1 has not started.'));
+
+    const closed = round.closeQuestion();
+    if (!closed.ok) return err(closed.error);
+
+    this.#syncRound1ActivePlayers();
+
+    return ok({
+      type: ROUND1_EVENTS.ROUND1_QUESTION_CLOSED,
+      payload: {
+        question: closed.value,
+        activePlayerIds: this.activePlayerIds(),
+        round1: round.view(),
+      },
+    });
+  }
+
+  /** Store one graded ruling. §4E — stored once, reused forever after. */
+  recordRound1Ruling(input: {
+    readonly teamId: TeamId;
+    readonly verdict: Round1Verdict;
+    readonly source: Round1GradeSource;
+    readonly isRetry: boolean;
+  }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round1;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 1 has not started.'));
+
+    const recorded = round.recordRuling(input);
+    if (!recorded.ok) return err(recorded.error);
+
+    return ok({
+      type: ROUND1_EVENTS.ROUND1_ANSWER_GRADED,
+      payload: {
+        teamId: input.teamId,
+        verdict: input.verdict,
+        source: input.source,
+        isRetry: input.isRetry,
+        needsHostReview: round.needsHostReview(),
+        gradingComplete: round.gradingComplete(),
+        round1: round.view(),
+      },
+    });
+  }
+
+  /** Open a 10-second FORGIVE MEH! retry for one team. §11, D-032. */
+  openRound1Retry(teamId: TeamId): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round1;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 1 has not started.'));
+
+    const opened = round.openRetry(teamId);
+    if (!opened.ok) return err(opened.error);
+
+    this.#syncRound1ActivePlayers();
+
+    return ok({
+      type: ROUND1_EVENTS.ROUND1_RETRY_OPENED,
+      payload: {
+        teamId,
+        question: opened.value,
+        activePlayerIds: this.activePlayerIds(),
+        round1: round.view(),
+      },
+    });
+  }
+
+  /** Grant a Maco! viewing to one nominated player, for ten seconds. §11. */
+  grantRound1Maco(input: {
+    readonly viewingTeamId: TeamId;
+    readonly viewingPlayerId: PlayerId;
+    readonly targetTeamId: TeamId;
+  }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round1;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 1 has not started.'));
+
+    const granted = round.grantMaco(input);
+    if (!granted.ok) return err(granted.error);
+
+    return ok({
+      type: ROUND1_EVENTS.ROUND1_MACO_VIEWED,
+      payload: {
+        viewingTeamId: input.viewingTeamId,
+        targetTeamId: input.targetTeamId,
+        // ⚠ NOT THE ANSWER. The viewing player receives the text in their own
+        // scoped snapshot; this event says only that a Maco! happened, because
+        // it reaches every client including the target.
+        expiresAt: granted.value.expiresAt,
+        round1: round.view(),
+      },
+    });
+  }
+
+  /** Record an ALLYUH HELP ME! assist for this question. §11. */
+  recordRound1Assist(input: {
+    readonly requestingTeamId: TeamId;
+    readonly assistingTeamId: TeamId;
+  }): Result<true> {
+    const round = this.#round1;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 1 has not started.'));
+    return round.recordAssist(input);
+  }
+
+  /**
+   * Score and reveal the current question. §11, spec §5.
+   *
+   * ================== WHERE DOUBLE IT! APPLIES ==================
+   * §11 — a correct answer with Double It! doubles BOTH the BB and the Round 1
+   * question score (20→40, 30→60, 50→100). So the multiplier is read once from
+   * the shared systems and applied to both totals, which is the only way they
+   * can be guaranteed to agree.
+   *
+   * An ALLYUH HELP ME! beneficiary gets the NORMAL BASE value even when the
+   * assisting team doubled — spec §9 is explicit. That is enforced by computing
+   * the assist from `baseValue` and never consulting the assisting team's
+   * multiplier.
+   * ==============================================================
+   */
+  revealRound1Answer(): Result<{
+    readonly change: EngineChange;
+    readonly ledgerEntries: readonly BbLedgerEntry[];
+  }> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round1;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 1 has not started.'));
+
+    if (!round.gradingComplete()) {
+      return err(
+        rejection('WRONG_STATE', 'Every submitted answer needs a ruling first.', {
+          pending: round.pendingGrading().length,
+        }),
+      );
+    }
+    const unresolved = round.needsHostReview();
+    if (unresolved.length > 0) {
+      return err(
+        rejection('WRONG_STATE', 'The Host must rule on every uncertain answer first.', {
+          teams: unresolved.join(', '),
+        }),
+      );
+    }
+
+    const proposed = round.proposedAwards();
+    const bbDeltas: Record<string, number> = {};
+    const awards: {
+      teamId: TeamId;
+      awardedBb: number;
+      awardedPoints: number;
+      doubled: boolean;
+    }[] = [];
+
+    for (const item of proposed) {
+      if (!item.correct) {
+        // §11 — a wrong answer scores 0, with NO BB deduction.
+        awards.push({ teamId: item.teamId, awardedBb: 0, awardedPoints: 0, doubled: false });
+        continue;
+      }
+
+      // An assist pays the base value, never the assisting team's doubled one.
+      const doubled = item.viaAssist ? false : this.#shared.isDoubledFor(item.teamId);
+      const value = doubled
+        ? this.#shared.applyMultiplier(item.teamId, item.baseValue)
+        : item.baseValue;
+
+      bbDeltas[item.teamId] = value;
+      awards.push({
+        teamId: item.teamId,
+        awardedBb: value,
+        // THE SAME NUMBER, to a different total. Not a second BB transaction.
+        awardedPoints: value,
+        doubled: doubled && value > item.baseValue,
+      });
+    }
+
+    const resolved = this.resolveChallenge({
+      winningTeamIds: awards.filter((a) => a.awardedBb > 0).map((a) => a.teamId),
+      bbDeltas,
+      decidedByHost: true,
+      completion: 'completed',
+      note: 'Round 1 question',
+    });
+    if (!resolved.ok) return err(resolved.error);
+
+    const applied = resolved.value.change.payload['result'] as GameChallengeResult;
+
+    // Points follow what the LEDGER actually applied, so a floored or clamped
+    // award can never leave the two totals disagreeing.
+    const finalAwards = awards.map((award) => ({
+      ...award,
+      awardedBb: applied.bbApplied[award.teamId] ?? award.awardedBb,
+    }));
+
+    const view = round.applyAwards(finalAwards);
+    if (!view.ok) return err(view.error);
+
+    this.#syncRound1ActivePlayers();
+
+    return ok({
+      change: {
+        type: ROUND1_EVENTS.ROUND1_ANSWER_REVEALED,
+        payload: {
+          question: view.value,
+          awards: finalAwards,
+          challengeResult: applied,
+          teams: this.teams(),
+          standings: round.standings(),
+          questionsComplete: round.questionsComplete,
+          round1: round.view(),
+        },
+      },
+      ledgerEntries: resolved.value.ledgerEntries,
+    });
+  }
+
+  /**
+   * Decide the Round 1 winner after all 15 questions. §11, D-032.
+   *
+   * ⚠ ON ROUND 1 POINTS, NOT BB (spec §11). Tied leaders enter the sudden-death
+   * trivia tiebreak, which this starts rather than deciding for them.
+   */
+  decideRound1Winner(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round1;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 1 has not started.'));
+
+    const decided = round.decideWinner();
+    if (!decided.ok) return err(decided.error);
+
+    if (decided.value.needsTiebreak) {
+      return ok({
+        type: ROUND1_EVENTS.ROUND1_TIEBREAK_STARTED,
+        payload: {
+          tiedTeamIds: decided.value.leaders,
+          // ⚠ NOT §21's end-of-game Sudden Death. A separate mechanism with a
+          // separate event, deliberately (spec §12).
+          round1: round.view(),
+        },
+      });
+    }
+
+    return ok({
+      type: ROUND1_EVENTS.ROUND1_WINNER_CONFIRMED,
+      payload: {
+        winningTeamId: decided.value.winningTeamId,
+        standings: round.standings(),
+        // NO BB is awarded for winning Round 1. No locked rule grants any.
+        round1: round.view(),
+      },
+    });
+  }
+
+  /** Start one sudden-death tiebreak question. D-032. */
+  startRound1TiebreakAttempt(item: Round1ContentItem): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round1;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 1 has not started.'));
+
+    const started = round.startTiebreakAttempt(item);
+    if (!started.ok) return err(started.error);
+
+    this.#syncRound1ActivePlayers();
+
+    return ok({
+      type: ROUND1_EVENTS.ROUND1_TIEBREAK_STARTED,
+      payload: {
+        attempt: started.value,
+        activePlayerIds: this.activePlayerIds(),
+        round1: round.view(),
+      },
+    });
+  }
+
+  /** A tied team's nominee submits a tiebreak answer. */
+  submitRound1TiebreakAnswer(input: {
+    readonly teamId: TeamId;
+    readonly playerId: PlayerId;
+    readonly answer: string;
+  }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round1;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 1 has not started.'));
+
+    const submitted = round.submitTiebreakAnswer(input);
+    if (!submitted.ok) return err(submitted.error);
+
+    this.#syncRound1ActivePlayers();
+
+    return ok({
+      type: ROUND1_EVENTS.ROUND1_ANSWER_SUBMITTED,
+      payload: {
+        teamId: input.teamId,
+        tiebreak: true,
+        activePlayerIds: this.activePlayerIds(),
+        round1: round.view(),
+      },
+    });
+  }
+
+  /**
+   * Resolve one tiebreak attempt. D-032, spec §12.
+   *
+   * ⚠ MOVES NO BB AND NO ROUND 1 POINTS. It only eliminates teams. That is
+   * enforced by this method never calling the ledger and never calling
+   * `applyAwards` — there is simply no path from here to either total.
+   */
+  resolveRound1Tiebreak(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round1;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 1 has not started.'));
+
+    const resolved = round.resolveTiebreakAttempt();
+    if (!resolved.ok) return err(resolved.error);
+
+    this.#syncRound1ActivePlayers();
+
+    return ok({
+      type:
+        resolved.value.outcome === 'winner'
+          ? ROUND1_EVENTS.ROUND1_WINNER_CONFIRMED
+          : ROUND1_EVENTS.ROUND1_TIEBREAK_RESOLVED,
+      payload: {
+        attempt: resolved.value,
+        winningTeamId: round.winningTeamId,
+        standings: round.standings(),
+        round1: round.view(),
+      },
+    });
+  }
+
+  /**
+   * Whether the open Round 1 question's 60 seconds have run out.
+   *
+   * Polled, never scheduled — `@bb/game-rules` owns no wall clock, exactly as
+   * the challenge timer, the Clash window and Round 3's item windows are polled.
+   */
+  round1QuestionWindowExpired(): boolean {
+    return this.#round1?.questionWindowExpired() ?? false;
+  }
+
+  /** Whether a running FORGIVE MEH! retry window has run out. */
+  round1RetryWindowExpired(): boolean {
+    return this.#round1?.retryWindowExpired() ?? false;
+  }
+
+  /** The value of a difficulty. §11 — one number, two totals. */
+  round1ValueOf(difficulty: Round1Difficulty): number {
+    return ROUND1_VALUES[difficulty];
+  }
 
   // -------------------------------------------------------------------------
   // Round 3. Phase 7B.

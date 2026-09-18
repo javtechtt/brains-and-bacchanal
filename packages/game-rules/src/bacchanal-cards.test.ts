@@ -3,6 +3,7 @@ import {
   asChallengeId,
   asTeamId,
   BACCHANAL_CARD_TYPES,
+  CARD_CHALLENGE_KINDS,
   CARD_ELIGIBILITY,
   CARDS_WITHOUT_LEGAL_CHALLENGE,
   cardHasAnyLegalChallenge,
@@ -41,7 +42,7 @@ describe('the locked compatibility table', () => {
   // implementation drifts, this fails rather than the game quietly allowing a
   // card somewhere it should not.
   const EXPECTED: Record<CardChallengeKind, BacchanalCardType[]> = {
-    ROUND1_TRIVIA: ['GIMME_DAT', 'DOUBLE_IT', 'DOH_KNOW', 'ALLYUH_HELP_ME', 'FORGIVE_MEH'],
+    ROUND1_TRIVIA: ['MACO', 'DOUBLE_IT', 'ALLYUH_HELP_ME', 'FORGIVE_MEH'],
     ROUND2_PHYSICAL: ['DOUBLE_IT'],
     THINK_FAST: ['STEUPS', 'DOUBLE_IT', 'FORGIVE_MEH'],
     GUESS_THE_LOGO: ['DOUBLE_IT'],
@@ -74,12 +75,33 @@ describe('the locked compatibility table', () => {
   });
 });
 
-describe('Maco! — OPEN_RULES.md §7 stays open', () => {
-  it('has no legal challenge anywhere', () => {
-    // THE TEST THAT PROVES THE OPEN RULE WAS NOT QUIETLY DECIDED. If someone
-    // adds MACO to any row of the eligibility table, this fails.
-    expect(cardHasAnyLegalChallenge('MACO')).toBe(false);
-    expect(CARDS_WITHOUT_LEGAL_CHALLENGE).toEqual(['MACO']);
+describe('Maco! — OPEN_RULES.md §7 resolved by D-030', () => {
+  // This block previously asserted the OPPOSITE: that Maco had no legal
+  // challenge anywhere, proving the open rule had not been quietly decided.
+  // D-030 decided it deliberately, and Phase 7C added the table entry — so the
+  // assertions are inverted rather than deleted. The rule is still pinned; it
+  // is simply pinned to its resolved value now.
+
+  it('is legal in Round 1 trivia', () => {
+    expect(cardHasAnyLegalChallenge('MACO')).toBe(true);
+    expect(isCardEligible('MACO', 'ROUND1_TRIVIA')).toBe(true);
+  });
+
+  it('is legal in Round 1 trivia and NOWHERE else', () => {
+    // D-030 — "legal in Round 1 trivia, and only there". The card's meaning
+    // depends on a submitted opponent answer existing, which only Round 1's
+    // simultaneous format produces.
+    for (const kind of CARD_CHALLENGE_KINDS) {
+      expect(isCardEligible('MACO', kind)).toBe(kind === 'ROUND1_TRIVIA');
+    }
+  });
+
+  it('is no longer the card without a legal challenge', () => {
+    // Held `['MACO']` until D-030. Derived, so it updated itself — and it is
+    // NOT empty now: the same decision took Gimme Dat! and Doh Know out of
+    // Round 1, and no other locked row lists them (see the block below).
+    expect(CARDS_WITHOUT_LEGAL_CHALLENGE).not.toContain('MACO');
+    expect([...CARDS_WITHOUT_LEGAL_CHALLENGE].sort()).toEqual(['DOH_KNOW', 'GIMME_DAT']);
   });
 
   it('is still a Disruption card and still exists', () => {
@@ -88,8 +110,7 @@ describe('Maco! — OPEN_RULES.md §7 stays open', () => {
     expect(categoryOf('MACO')).toBe('DISRUPTION');
   });
 
-  it('can be dealt but never played', () => {
-    const cards = makeCards();
+  it('can now be dealt AND played in Round 1', () => {
     // Seeds are searched until one deals MACO, so the assertion is about the
     // card rather than about a particular seed.
     let dealtMaco = false;
@@ -102,19 +123,53 @@ describe('Maco! — OPEN_RULES.md §7 stays open', () => {
 
       dealtMaco = true;
       attempt.openWindow(CHALLENGE, 'ROUND1_TRIVIA');
-      expect(attempt.playabilityOf(maco.cardInstanceId, false)).toBe(
-        'compatibility_unresolved',
-      );
+      // null means "no reason it cannot be played".
+      expect(attempt.playabilityOf(maco.cardInstanceId, false)).toBeNull();
 
       const played = attempt.play({
         teamId: TEAM_A,
         cardInstanceId: maco.cardInstanceId,
         paused: false,
       });
-      expect(played.ok).toBe(false);
+      expect(played.ok).toBe(true);
     }
     expect(dealtMaco).toBe(true);
-    expect(cards).toBeDefined();
+  });
+
+  it('is refused outside Round 1', () => {
+    let checked = false;
+    for (let seed = 1; seed < 60 && !checked; seed += 1) {
+      const attempt = makeCards(seed);
+      attempt.deal([TEAM_A]);
+      const maco = attempt.handOf(TEAM_A).find((card) => card.cardType === 'MACO');
+      if (maco === undefined) continue;
+
+      checked = true;
+      attempt.openWindow(CHALLENGE, 'GUESS_THE_LOGO');
+      expect(attempt.playabilityOf(maco.cardInstanceId, false)).toBe('not_eligible');
+      expect(
+        attempt.play({ teamId: TEAM_A, cardInstanceId: maco.cardInstanceId, paused: false }).ok,
+      ).toBe(false);
+    }
+    expect(checked).toBe(true);
+  });
+});
+
+describe('Gimme Dat! and Doh Know left Round 1 with D-030', () => {
+  it('bars both from Round 1 trivia', () => {
+    // Both act on an individually assigned question. Round 1 no longer assigns
+    // one — every team answers the same question simultaneously (§11), so the
+    // cards have nothing to steal or pass.
+    expect(isCardEligible('GIMME_DAT', 'ROUND1_TRIVIA')).toBe(false);
+    expect(isCardEligible('DOH_KNOW', 'ROUND1_TRIVIA')).toBe(false);
+  });
+
+  it('leaves them with no legal challenge at all, for now', () => {
+    // Not an oversight: no OTHER locked row lists them either. Family Feud and
+    // Round 4 may yet give them one, so the cards stay modelled and dealt
+    // exactly as Maco was while §7 stood open.
+    expect(cardHasAnyLegalChallenge('GIMME_DAT')).toBe(false);
+    expect(cardHasAnyLegalChallenge('DOH_KNOW')).toBe(false);
   });
 });
 
@@ -311,8 +366,15 @@ describe('playing a card', () => {
     // Every other card in the hand is now barred for this challenge.
     for (const card of cards.handOf(TEAM_A)) {
       if (card.cardInstanceId === first.cardInstanceId) continue;
+
+      // A card with no legal row ANYWHERE reports that first, by deliberate
+      // precedence in #unplayableReason: "already played" would imply the card
+      // could otherwise have been played here, and it could not. Since D-030
+      // that is Gimme Dat! and Doh Know. Either way it is unplayable, which is
+      // what this test is about.
+      const noLegalChallenge = card.cardType === 'GIMME_DAT' || card.cardType === 'DOH_KNOW';
       expect(cards.playabilityOf(card.cardInstanceId, false)).toBe(
-        'already_played_this_challenge',
+        noLegalChallenge ? 'compatibility_unresolved' : 'already_played_this_challenge',
       );
     }
   });

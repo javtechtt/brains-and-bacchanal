@@ -210,9 +210,10 @@ describe('dealing Bacchanal cards over a real socket', () => {
     }
   });
 
-  it('marks Maco! unplayable while OPEN_RULES.md §7 is open', async () => {
-    // The open-rule guard, over the wire. Whichever team is dealt MACO must see
-    // it as held-but-unplayable, never as a legal option.
+  it('marks Maco! PLAYABLE in Round 1 now that D-030 resolved §7', async () => {
+    // This test previously asserted the opposite over the wire. D-030 resolved
+    // the rule, so it now pins the resolved value: whichever team is dealt MACO
+    // must see it as a legal option in Round 1 trivia.
     const party = await makeGame();
     try {
       await openCardWindow(party, 'ROUND1_TRIVIA');
@@ -222,14 +223,36 @@ describe('dealing Bacchanal cards over a real socket', () => {
         const maco = snapshot.shared?.yourHand.find((c) => c.cardType === 'MACO');
         if (maco === undefined) continue;
 
-        expect(maco.playable).toBe(false);
-        expect(maco.unplayableReason).toBe('compatibility_unresolved');
+        expect(maco.playable).toBe(true);
+        expect(maco.unplayableReason).toBeNull();
+      }
+    } finally {
+      await closeParty(party);
+    }
+  });
 
-        // And the server refuses it even if a client ignored that.
-        const played = await client.submit(SHARED_INTENTS.PLAY_BACCHANAL_CARD, {
-          cardInstanceId: maco.cardInstanceId,
-        });
-        expect(played.ok).toBe(false);
+  it('marks Gimme Dat! and Doh Know unplayable — they left Round 1 with D-030', async () => {
+    // The open-rule guard has not disappeared, it MOVED. These two lost their
+    // only legal row when Round 1 stopped assigning individual questions, so
+    // they are now the cards held but never playable.
+    const party = await makeGame();
+    try {
+      await openCardWindow(party, 'ROUND1_TRIVIA');
+
+      for (const client of [party.p1, party.p2]) {
+        const snapshot = await playerSnapshot(client);
+        for (const card of snapshot.shared?.yourHand ?? []) {
+          if (card.cardType !== 'GIMME_DAT' && card.cardType !== 'DOH_KNOW') continue;
+
+          expect(card.playable).toBe(false);
+          expect(card.unplayableReason).toBe('compatibility_unresolved');
+
+          // And the server refuses it even if a client ignored that.
+          const played = await client.submit(SHARED_INTENTS.PLAY_BACCHANAL_CARD, {
+            cardInstanceId: card.cardInstanceId,
+          });
+          expect(played.ok).toBe(false);
+        }
       }
     } finally {
       await closeParty(party);

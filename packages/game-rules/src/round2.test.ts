@@ -694,9 +694,13 @@ describe('Round 2 card eligibility', () => {
         expect(card.playable).toBe(true);
       } else {
         expect(card.playable).toBe(false);
-        // MACO reports the OPEN RULE, never "wrong challenge" — OPEN_RULES.md §7.
+        // A card with NO legal row anywhere reports that fact rather than
+        // "wrong challenge". Since D-030 that is Gimme Dat! and Doh Know —
+        // Maco moved the other way and is now legal in Round 1 (§6).
         expect(card.unplayableReason).toBe(
-          card.cardType === 'MACO' ? 'compatibility_unresolved' : 'not_eligible',
+          card.cardType === 'GIMME_DAT' || card.cardType === 'DOH_KNOW'
+            ? 'compatibility_unresolved'
+            : 'not_eligible',
         );
       }
     }

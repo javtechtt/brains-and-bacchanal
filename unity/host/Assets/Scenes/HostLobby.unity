@@ -148,8 +148,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 5177ed602e3d9e44d9aa84138742fbc9, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::BrainsAndBacchanal.HostLobby
-  serverHost: 127.0.0.1
+  serverHost: chester-contributed-varies-calculations.trycloudflare.com
   serverPort: 4000
+  serverUseTls: 1
 --- !u!4 &352994735
 Transform:
   m_ObjectHideFlags: 0

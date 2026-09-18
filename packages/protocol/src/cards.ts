@@ -309,7 +309,8 @@ export const CARD_UNPLAYABLE_REASONS = [
   /** The card is not in the challenge's eligibility list. */
   'not_eligible',
   /**
-   * The card has no legal challenge anywhere — MACO, pending OPEN_RULES.md §7.
+   * The card has no legal challenge anywhere. Today: Gimme Dat! and Doh Know,
+   * which lost Round 1 with D-030 and appear in no other locked row.
    * Distinct from `not_eligible` so a UI can say "not yet decided" rather than
    * "wrong challenge", which would imply a right one exists.
    */
@@ -485,14 +486,18 @@ export interface ActiveCardEffectView {
  * team's" question, Doh Know passes "to another team", Allyuh Help Me consults
  * "another team", Steups acts "on an opposing team's valid answer".
  *
+ * MACO is here too, since D-030: §3 has always said it looks at "another
+ * team's" submitted answer, and resolving §7 is what finally gave it a
+ * challenge to be played into.
+ *
  * Double It and Forgive Meh act on the owner's own play and take no target.
- * MACO is absent for the same reason it is absent everywhere — §7 is open.
  */
 export const CARDS_REQUIRING_TARGET: readonly BacchanalCardType[] = [
   'GIMME_DAT',
   'DOH_KNOW',
   'ALLYUH_HELP_ME',
   'STEUPS',
+  'MACO',
 ];
 
 /** Whether playing this card requires naming an opposing team. */

@@ -139,21 +139,47 @@ resolves at ≥500 BB and is blocked below it (§12).
 
 ## Phase 7 — Rounds ◀ IN PROGRESS
 
-### Round 1 — rules locked, NOT implemented
+### Round 1 ✅ COMPLETE (Phase 7C)
 
-**The rules are now fully locked** (D-030, `GAME_RULES_LOCKED.md` §11): 15
-questions (5/5/5), all teams answering the same question simultaneously, 60
-seconds each, Easy 20 / Medium 30 / Hard 50 awarded as BB *and* as separate
-Round 1 points. Card compatibility is Maco!, Double It!, ALLYUH HELP ME!,
-FORGIVE MEH!
+Built:
+- 15 questions (5 Easy / 5 Medium / 5 Hard), every team answering the **same**
+  question simultaneously, 60 seconds each,
+- **two totals from one correct answer** — BB to the main balance, and a
+  separate Round 1 point total that decides the round winner,
+- difficulty nominees stored as **player ids**, with the server refusing a
+  submission from anyone else,
+- a **hybrid grading pipeline**: normalisation, canonical/variant match, a
+  conservative Damerau-Levenshtein typo tolerance, then an AI semantic judge
+  only for what those cannot decide, then the Host,
+- **the reveal last** — the canonical answer is withheld from players *and the
+  Host* until grading, review and any retry have completed,
+- Maco!, Double It!, ALLYUH HELP ME! and FORGIVE MEH! through the existing
+  Phase 6 card systems, with the 10-second retry window D-032 locked,
+- a **sudden-death trivia tiebreaker** that moves no BB and adds no points,
+  kept architecturally distinct from §21's end-of-game Sudden Death,
+- Round 1 state on both snapshots, the Unity Host panel and the player screen,
+- **entry through the real progression** — Round 1 begins when the game starts,
+  because it is the first round. `DEV_START_ROUND1` exists for isolated testing
+  only.
 
-`OPEN_RULES.md` §1 and §7 are **resolved**. One narrow item remains: the
-FORGIVE MEH! retry-window duration (§13).
+`OPEN_RULES.md` §13 is **resolved** (D-032), so Round 1 is fully locked.
+`CARD_ELIGIBILITY.ROUND1_TRIVIA` now lists MACO, and the Phase 6 tests that
+asserted it was unplayable were **inverted rather than deleted**.
 
-**No code exists yet.** Round 2 therefore still has a development-gated entry
-(`DEV_START_ROUND2`) rather than a production path, and `CARD_ELIGIBILITY` still
-has no MACO entry — a Phase 6 test asserts Maco is unplayable and will fail when
-one is added, which is the intended signal.
+Verified: 1021 tests, a 30/30 compiled-server walkthrough, a 41/41 Unity
+headless check with zero compile errors, every earlier Unity check unchanged,
+and an IL2CPP standalone build with 0 errors and 0 warnings.
+
+**Physical testing is still outstanding** — see `docs/ROUND_1.md`.
+
+Not included, deliberately: an AI provider adapter (no provider decision exists,
+and Phase 7C did not make one by default); Bacchanal cards in the tiebreaker
+(no locked source addresses them — `OPEN_RULES.md` §14); and a production
+content pipeline.
+
+Still deferred, and now the obvious next piece of work: **Round 1's completion
+does not yet feed Round 2.** Round 2 and Round 3 keep their development-gated
+entries.
 
 ### Round 2 ✅ COMPLETE (Phase 7A)
 
@@ -188,8 +214,10 @@ raw engine phases (`CHALLENGE_INTRO`, prepare, begin, open card window) rather
 than one "start the challenge" control. That is a test instrument, not the
 intended Host experience.
 
-**Nothing in `OPEN_RULES.md` was resolved.** Maco! is still unplayable (§7), and
-Round 1's allocation (§1) is what forced the development entry.
+**Nothing in `OPEN_RULES.md` was resolved by Phase 7A.** Maco! was still
+unplayable then (§7, since resolved by D-030), and Round 1's absence is what
+forced the development entry — which still stands until Round 1's completion is
+wired into Round 2.
 
 ### Round 3 ✅ COMPLETE (Phase 7B)
 

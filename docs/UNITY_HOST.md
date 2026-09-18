@@ -119,6 +119,19 @@ secrecy.
 Unity.exe -batchmode -quit -nographics -projectPath unity/host   -executeMethod BrainsAndBacchanal.EditorTools.HeadlessRound3Check.Run
 ```
 
+### Round 1 (Phase 7C)
+
+Nominations, the 60-second question, submission authority, grading, Host review,
+the reveal, and the two totals. Also asserts the secrecy claims that are about
+BYTES — the canonical answer, a future question, and another team's answer are
+none of them in the JSON a client receives.
+
+Needs the server running with development tools enabled.
+
+```bash
+Unity.exe -batchmode -quit -nographics -projectPath unity/host   -executeMethod BrainsAndBacchanal.EditorTools.HeadlessRound1Check.Run
+```
+
 #### A SECOND JsonUtility trap: it cannot deserialise a dictionary
 
 Phase 7A found that JsonUtility cannot represent a null class field. Round 3

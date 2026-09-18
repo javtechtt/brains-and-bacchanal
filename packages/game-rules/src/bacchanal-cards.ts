@@ -108,11 +108,14 @@ export class BacchanalCards {
    * GAME_RULES_LOCKED.md §2 — one random Disruption, one random Power/Strategy,
    * one random Recovery/Social. Exactly three cards, one from each pool.
    *
-   * MACO IS IN THE DISRUPTION POOL and may be dealt. Phase 6 spec §6: "it may
-   * exist in starting hands... Do NOT remove Maco! from the starting hand unless
-   * the owner explicitly changes the rule." A team that draws it holds a card
-   * with no legal challenge — a consequence of OPEN_RULES.md §7 being open, not
-   * a bug. `playabilityOf` reports it as `compatibility_unresolved`.
+   * MACO IS IN THE DISRUPTION POOL and, since D-030, is playable — in Round 1
+   * trivia, and only there. Phase 6 kept it dealt while it had no legal
+   * challenge rather than engineering it out of the deck, which is why
+   * resolving the rule needed no change here.
+   *
+   * Gimme Dat! and Doh Know are now the cards a team may hold without a legal
+   * challenge, having lost Round 1 to the same decision. `playabilityOf`
+   * reports them as `compatibility_unresolved`.
    *
    * Dealing twice is refused: it would either double a hand or silently replace
    * one a team has already seen.
@@ -336,9 +339,10 @@ export class BacchanalCards {
     if (paused) return 'paused';
     if (card.status !== 'HELD') return 'not_held';
 
-    // OPEN_RULES.md §7. Reported before the eligibility check so the message is
-    // "not decided yet" rather than "wrong challenge" — the latter would imply
-    // a right challenge exists somewhere, and none does.
+    // A card with no legal row ANYWHERE. Reported before the eligibility check
+    // so the message is "not decided yet" rather than "wrong challenge" — the
+    // latter would imply a right challenge exists somewhere, and none does.
+    // Today that is Gimme Dat! and Doh Know (D-030); it was MACO before.
     if (!cardHasAnyLegalChallenge(card.cardType)) return 'compatibility_unresolved';
 
     if (!this.#windowOpen || this.#challengeKind === null) return 'no_challenge';

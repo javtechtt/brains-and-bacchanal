@@ -116,7 +116,8 @@ describe('Maco! — OPEN_RULES.md §7 resolved by D-030', () => {
     let dealtMaco = false;
     for (let seed = 1; seed < 60 && !dealtMaco; seed += 1) {
       const attempt = makeCards(seed);
-      attempt.deal([TEAM_A]);
+      // Both teams, because Maco! needs an opponent to target.
+      attempt.deal([TEAM_A, TEAM_B]);
       const hand = attempt.handOf(TEAM_A);
       const maco = hand.find((card) => card.cardType === 'MACO');
       if (maco === undefined) continue;
@@ -126,9 +127,19 @@ describe('Maco! — OPEN_RULES.md §7 resolved by D-030', () => {
       // null means "no reason it cannot be played".
       expect(attempt.playabilityOf(maco.cardInstanceId, false)).toBeNull();
 
+      // Maco! TARGETS an opponent — §3, "look at another team's submitted
+      // answer" — so a play without one is refused.
+      const untargeted = attempt.play({
+        teamId: TEAM_A,
+        cardInstanceId: maco.cardInstanceId,
+        paused: false,
+      });
+      expect(untargeted.ok).toBe(false);
+
       const played = attempt.play({
         teamId: TEAM_A,
         cardInstanceId: maco.cardInstanceId,
+        targetTeamId: TEAM_B,
         paused: false,
       });
       expect(played.ok).toBe(true);

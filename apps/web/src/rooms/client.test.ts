@@ -127,6 +127,81 @@ function pausedGameSnapshot() {
   };
 }
 
+/**
+ * A mid-Round-4 game, as the server reports it to a returning phone.
+ *
+ * Phase 7D-B: the same reconnect regression client.test.ts already guards
+ * against (a phone that keeps a stale pre-disconnect snapshot) applies to
+ * Round 4 with nothing round-specific in `BrowserRoomClient` to carry it —
+ * `game.round4` rides through the SAME `REQUEST_GAME_SNAPSHOT` round-trip as
+ * every other round. This pins that the full Round 4 shape (matchup, board,
+ * face-off, strikes, pot) survives that round-trip untouched, since the
+ * client has no code path that could special-case or drop it.
+ */
+function midRound4GameSnapshot() {
+  return {
+    isHost: false,
+    you: 'p1',
+    yourTeamId: 'TEAM_A',
+    teams: [{ teamId: 'TEAM_A', displayName: 'Team A', memberIds: ['p1'], bb: 1_000 }],
+    game: {
+      gameId: 'g1',
+      phase: 'ACTIVE_PLAY',
+      paused: false,
+      challenge: { challengeId: 'c1', timer: null },
+      round4: {
+        roundIndex: 4,
+        enteringStandings: [
+          { teamId: 'TEAM_A', rank: 'SECOND', enteringBb: 1_000 },
+          { teamId: 'TEAM_B', rank: 'THIRD', enteringBb: 800 },
+        ],
+        matchupStage: 'FIRST',
+        matchupTeamIds: ['TEAM_A', 'TEAM_B'],
+        inactiveTeamId: null,
+        scoringGates: [],
+        surveysPlayedInMatchup: 0,
+        current: {
+          progress: 'board_play',
+          board: {
+            surveyId: 'ff-test-q1',
+            prompt: 'TEST SURVEY 1',
+            questionNumber: 1,
+            answerCount: 3,
+            answers: [
+              { answerId: 'a1', rank: 1, revealed: false, text: null, value: null, steupsRemoved: false, steupsRemovedForTeamId: null },
+            ],
+            doubled: false,
+            accumulatedPoints: 40,
+            strikes: 1,
+            maxStrikes: 3,
+          },
+          faceoff: null,
+          boardPlay: {
+            controllingTeamId: 'TEAM_A',
+            playerOrder: ['p1'],
+            currentPlayerIndex: 0,
+            strikes: 1,
+            turnTimer: {
+              durationMs: 5_000,
+              remainingMs: 3_500,
+              paused: true,
+              expired: false,
+              startedAt: 1_000,
+            },
+          },
+          steal: null,
+          resolvedWinnerTeamId: null,
+          awardedBb: null,
+          resolvedAt: null,
+        },
+        complete: false,
+        matchupWinnerTeamId: null,
+        round4WinnerTeamId: null,
+      },
+    },
+  };
+}
+
 const identity = {
   roomId: 'room-1',
   roomCode: 'BX7K',
@@ -217,5 +292,43 @@ describe('reconnecting mid-game', () => {
     // Nothing to read: the player is no longer in the room.
     expect(socket.typesSent()).not.toContain(GAME_INTENTS.REQUEST_GAME_SNAPSHOT);
     expect(handlers.onGameSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('restores the full Round 4 shape on reconnect, with no action replayed', async () => {
+    const client = new BrowserRoomClient('http://localhost:4000', handlers);
+    await client.connect();
+    const socket = FakeSocket.instances[0]!;
+
+    const resumed = client.resumeIdentity(identity);
+    await socket.reply(ROOM_INTENTS.RECONNECT_PLAYER, { snapshot: lobbySnapshot() });
+    await socket.reply(GAME_INTENTS.REQUEST_GAME_SNAPSHOT, midRound4GameSnapshot());
+    await resumed;
+
+    // The reconnect path sends nothing but the two lookups above — no buzz,
+    // no answer, no wager is replayed to "catch up" the returning phone.
+    expect(socket.typesSent()).toEqual([
+      ROOM_INTENTS.RECONNECT_PLAYER,
+      GAME_INTENTS.REQUEST_GAME_SNAPSHOT,
+    ]);
+
+    const delivered = handlers.onGameSnapshot.mock.calls[0]?.[0];
+    const round4 = delivered.game.round4;
+    expect(round4.matchupStage).toBe('FIRST');
+    expect(round4.matchupTeamIds).toEqual(['TEAM_A', 'TEAM_B']);
+    expect(round4.current.progress).toBe('board_play');
+    expect(round4.current.board.accumulatedPoints).toBe(40);
+    expect(round4.current.board.strikes).toBe(1);
+    expect(round4.current.boardPlay.controllingTeamId).toBe('TEAM_A');
+    // CONTENT SAFETY survives the round-trip too: an unrevealed answer's text
+    // and value are still null, never backfilled by the client.
+    expect(round4.current.board.answers[0].revealed).toBe(false);
+    expect(round4.current.board.answers[0].text).toBeNull();
+    expect(round4.current.board.answers[0].value).toBeNull();
+    // Phase 7D-B1: the board-turn timer reaches the client shape exactly as
+    // the server sent it — paused and with its banked remaining time, not
+    // reset to the full 5 seconds by the reconnect round-trip itself.
+    expect(round4.current.boardPlay.turnTimer.durationMs).toBe(5_000);
+    expect(round4.current.boardPlay.turnTimer.remainingMs).toBe(3_500);
+    expect(round4.current.boardPlay.turnTimer.paused).toBe(true);
   });
 });

@@ -584,26 +584,83 @@ Repeat until one team remains.
 
 ## 19. Family Feud
 
-Family Feud is the **first main game section using the phone buzzer**.
+Family Feud is the **first main game section using the phone buzzer**. It
+follows authentic Family Feud-style mechanics as closely as practical, with the
+Brains & Bacchanal card system, BB, question allocation, the 3-team matchup
+structure and the custom steal wager layered on top. See D-033.
 
-Existing concepts:
-- face-off,
-- board answers,
-- control,
-- strikes,
-- steal,
-- steal wager.
+### Face-off
 
-Steal wager:
-- after three strikes, opposing team may steal,
-- stealing team may wager up to 50% of current BB before answering,
-- correct steal → board BB + wager winnings,
-- wrong steal → lose wager and original team gets board BB,
-- BB floor is 0.
+- the Host begins reading the survey question aloud,
+- **the digital buzzer opens while the Host is reading** — there is no separate
+  countdown before buzzing is allowed,
+- the first valid buzz locks out the opposing face-off player and the Host
+  stops reading,
+- the buzzer winner has **3 seconds** to give an answer,
+- if that answer is the **#1 board answer**, that team wins the face-off
+  immediately,
+- otherwise, the opposing face-off player gets **one opportunity** to give a
+  higher-ranked board answer,
+- whichever valid answer ranks higher wins the face-off,
+- the face-off winner chooses **PLAY** or **PASS**.
 
-Questions 4 and 5 are already doubled.
+### Normal board play
+
+- players answer in team order; **one player answers per turn**,
+- **no team conferring** during normal board play,
+- each turn has a **5-second** answer timer,
+- a valid, unrevealed board answer is revealed and scores its board value,
+- a wrong answer, a duplicate answer, an off-board answer, or failing to answer
+  in time is **one strike**,
+- after **3 strikes**, the opposing team gets one steal opportunity.
+
+### Steal
+
+- the stealing team gets **30 seconds** to confer and give **one** final
+  answer,
+- before answering, the stealing team may wager up to **50% of its current BB**
+  — the existing custom steal wager, unchanged,
+- correct steal → the stealing team wins the accumulated survey-board points
+  **and** the wager amount, per the existing wager mechanic,
+- wrong steal → the stealing team loses its wager, and the original controlling
+  team receives the accumulated survey-board points,
+- BB never goes below 0.
+
+### Cards in Family Feud
+
+Brains & Bacchanal cards remain layered on top of Family Feud play. The
+existing one-card-per-team-per-question restriction and Clash behavior (§2, §5)
+still apply.
+
+**Steups!**
+- may be used after an opposing team gives a valid board answer,
+- that answer is removed for the defending team: it does not score, and the
+  defending team cannot reuse it during that survey,
+- the team that played Steups! may later use the removed answer if they gain a
+  legal opportunity to give it,
+- this is the general Steups! effect (§3), applied to a Family Feud board.
+
+**FORGIVE MEH!**
+- may be used after a wrong board-play answer,
+- gives that player one final retry, **before** the strike is applied,
+- a correct retry means **no strike**,
+- a wrong retry means **one strike** — never two for the same turn,
+- the shared retry restrictions (§4) still apply.
+
+**Inactive third team, in a 3-team Round 4 matchup**
+- the team not currently participating in a matchup **cannot** play Bacchanal
+  cards into it,
+- its cards remain untouched and become playable again once it is an active
+  participant.
+
+### Multipliers
+
+Questions 4 and 5 are already doubled. No other multiplier is defined.
 
 ## 20. Three-Team Round 4
+
+This structure is preserved exactly as locked; §19 layers the face-off, board
+play, steal and card rules on top of each matchup it describes below.
 
 1. Rank teams by BB entering Round 4.
 2. 2nd and 3rd play first.
@@ -621,12 +678,23 @@ Questions 4 and 5 are already doubled.
 
 Highest BB after Round 4 wins.
 
-If tied leaders remain:
-- tied leaders enter Sudden Death,
-- first team to achieve **two consecutive correct answers** wins,
-- wrong answer after buzzing = immediate loss,
-- buzz then fail to answer in time = immediate loss,
-- no buzz before buzzer window closes = no penalty; next question.
+If tied leaders remain, they enter Sudden Death. D-034 replaces the format
+below (a face-off sequence) for what this section originally locked
+(individual questions, first to two consecutive correct answers) — a
+deliberate rule REPLACEMENT, not an addition.
+
+Sudden Death is a sequence of **face-offs** — the same face-off mechanic as
+§19 (the buzzer opens while the Host reads, the first valid buzz locks out the
+other side, that team has a timed answer window):
+
+- a team wins a face-off by giving the #1 board answer,
+- a **wrong answer, or failing to answer after buzzing (a timeout), loses that
+  face-off outright** — there is no opponent's-chance fallback inside Sudden
+  Death,
+- if **neither** team gives a valid answer in a face-off, nothing is decided
+  and the game continues to another face-off with a fresh question,
+- the **first team to win two face-offs in a row** (consecutive — a loss
+  resets the streak to zero) wins Sudden Death, and the game.
 
 No:
 - Market,
@@ -635,6 +703,9 @@ No:
 - advantages,
 - wagers,
 - multipliers.
+
+The exact answer-window duration for a Sudden Death face-off is still not
+locked — see `OPEN_RULES.md` §11.
 
 ## 22. Disconnect
 

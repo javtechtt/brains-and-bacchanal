@@ -6,6 +6,8 @@ import type { ConnectionStatus } from './client';
 import { PlayerRound2 } from './PlayerRound2';
 import { PlayerRound1 } from './PlayerRound1';
 import { PlayerRound3 } from './PlayerRound3';
+import { PlayerRound4 } from './PlayerRound4';
+import { PlayerSuddenDeath } from './PlayerSuddenDeath';
 import { PlayerSharedSystems } from './PlayerSharedSystems';
 import * as ui from './ui';
 
@@ -118,6 +120,28 @@ export function PlayerGame({
         {game?.round3 !== null && game?.round3 !== undefined && (
           <PlayerRound3
             round3={game.round3}
+            yourTeamId={teamId}
+            paused={paused}
+            {...(submit === undefined ? {} : { submit })}
+          />
+        )}
+
+        {/* PHASE 7D-B — Round 4, Family Feud. Null in every other round. */}
+        {game?.round4 !== null && game?.round4 !== undefined && (
+          <PlayerRound4
+            round4={game.round4}
+            teams={snapshot.teams}
+            yourTeamId={teamId}
+            yourPlayerId={snapshot.you}
+            paused={paused}
+            {...(submit === undefined ? {} : { submit })}
+          />
+        )}
+
+        {/* PHASE 7D-B2 — Sudden Death. §21 / D-034. Null outside Sudden Death. */}
+        {game?.suddenDeath !== null && game?.suddenDeath !== undefined && (
+          <PlayerSuddenDeath
+            suddenDeath={game.suddenDeath}
             yourTeamId={teamId}
             paused={paused}
             {...(submit === undefined ? {} : { submit })}

@@ -19,6 +19,11 @@ import {
   ROUND3_CHALLENGES,
   ROUND3_EVENTS,
   ROUND3_ROUND_INDEX,
+  ROUND4_EVENTS,
+  ROUND4_ROUND_INDEX,
+  SHARED_EVENTS,
+  SUDDEN_DEATH_EVENTS,
+  SUDDEN_DEATH_ROUND_INDEX,
   isRpsChoice,
   type CardChallengeKind,
   type HostDealTemplate,
@@ -48,7 +53,12 @@ import {
   type Round2StateView,
   type Round3ContentItem,
   type Round3StateView,
+  type Round4PlayDecision,
+  type Round4StateView,
+  type Round4StrikeReason,
+  type Round4Survey,
   type SequenceNumber,
+  type SuddenDeathStateView,
   type TeamId,
   type TimerView,
   type TurnOwnership,
@@ -57,6 +67,8 @@ import {
 import { Round1 } from './round1.js';
 import { Round2 } from './round2.js';
 import { Round3 } from './round3.js';
+import { Round4 } from './round4.js';
+import { SuddenDeath } from './sudden-death.js';
 import { BbLedger } from './bb-ledger.js';
 import type { Clock } from './clock.js';
 import type { EventLog } from './event-log.js';
@@ -183,6 +195,10 @@ export class GameEngine {
   #round3: Round3 | null = null;
   /** Round 1 progression, once the round is entered. Null otherwise. */
   #round1: Round1 | null = null;
+  /** Round 4 progression, once the round is entered. Null otherwise. Phase 7D-A2. */
+  #round4: Round4 | null = null;
+  /** Sudden Death progression, once entered. Null otherwise. Phase 7D-B2. */
+  #suddenDeath: SuddenDeath | null = null;
   /**
    * Players whose participation the CURRENT challenge requires.
    *
@@ -298,6 +314,11 @@ export class GameEngine {
       // the room, which knows who is asking; this default hides every submitted
       // answer and every Maco! viewing.
       round1: this.round1View(),
+      // Phase 7D-A2. Null outside Round 4. Unscoped — Round4's own view type is
+      // already secrecy-safe for every viewer, the same reasoning `round2` uses.
+      round4: this.round4View(),
+      // Phase 7D-B2. Null outside Sudden Death. Unscoped for the same reason.
+      suddenDeath: this.suddenDeathView(),
     };
   }
 
@@ -969,6 +990,8 @@ export class GameEngine {
     // reason and by the same mechanism.
     this.#round3?.pauseItemWindow();
     this.#round1?.pauseWindows();
+    this.#round4?.pauseTimers();
+    this.#suddenDeath?.pauseTimers();
     // The Clash's 6-second window is a deadline like any other: a team must not
     // lose its chance to counter because someone's phone died. D-011.
     this.#shared.clash.pause();
@@ -1010,6 +1033,8 @@ export class GameEngine {
     this.#timer.resume();
     this.#round3?.resumeItemWindow();
     this.#round1?.resumeWindows();
+    this.#round4?.resumeTimers();
+    this.#suddenDeath?.resumeTimers();
     this.#shared.clash.resume();
 
     return ok({
@@ -1236,13 +1261,21 @@ export class GameEngine {
       return err(rejection('NOT_FOUND', 'Unknown team.', { teamId: input.teamId }));
     }
 
+    // §19 / D-033 — in a 3-team Round 4 matchup, the inactive third team is
+    // never offered a Clash response: it "cannot play Bacchanal cards into it"
+    // at all, not merely the initiating play. Every other round has no
+    // inactive team, so `allTeams` (every team) is unchanged outside Round 4.
+    const allTeams = [...this.#teams.keys()].map((id) => asTeamId(id));
+    const eligibleTeamIds =
+      this.#round4 !== null ? allTeams.filter((id) => this.#round4?.matchupTeamIds.includes(id) ?? true) : allTeams;
+
     const played = this.#shared.playCard({
       teamId: input.teamId,
       cardInstanceId: input.cardInstanceId,
       targetTeamId: input.targetTeamId ?? null,
       challengeId: challenge.challengeId,
       paused: this.paused,
-      allTeamIds: [...this.#teams.keys()].map((id) => asTeamId(id)),
+      allTeamIds: eligibleTeamIds,
     });
     if (!played.ok) return err(played.error);
 
@@ -3060,6 +3093,1052 @@ export class GameEngine {
     }
 
     const began = this.beginRound3();
+    if (!began.ok) return err(began.error);
+    changes.push(began.value);
+
+    return ok(changes);
+  }
+
+  // -------------------------------------------------------------------------
+  // Round 4 — Family Feud. Phase 7D-A2.
+  //
+  // GAME_RULES_LOCKED.md §19-§20, DECISION_LOG.md D-008 and D-033.
+  //
+  // ================== ONE GENERIC CHALLENGE PER SURVEY ==========================
+  // Round 1 maps one question to one generic `#challenge`, Round 3 one item-set
+  // to one. Round 4 follows the SAME shape: each survey is its own
+  // prepare/start/resolve cycle through the generic engine, which is what makes
+  // card play (`playBacchanalCard`, gated on `#challenge !== null`) and the
+  // Clash work for Round 4 exactly as they already do for Round 1 and Round 3 —
+  // no second card pipeline is built here.
+  // ================================================================================
+  //
+  // ================== ROUND4 NEVER TOUCHES THE LEDGER OR THE WAGER ==============
+  // `Round4` returns what it needs applied (a base award, a max-wager cap
+  // request) and this layer is the ONLY place that calls `#ledger` through
+  // `resolveChallenge` or `#shared.deals`. The Q4/Q5 doubling that
+  // `Round4.resolveSurvey` already applies is the round's OWN multiplier
+  // (§19 — "Questions 4 and 5 are already doubled"), entirely separate from
+  // Double It's shared multiplier budget; the two are never composed on the same
+  // award, because a Q4/Q5 award is never additionally run through
+  // `#shared.applyMultiplier` and Double It is absent from `FAMILY_FEUD_Q4_Q5`'s
+  // card eligibility (protocol/cards.ts) for exactly this reason.
+  // ================================================================================
+
+  get round4(): Round4 | null {
+    return this.#round4;
+  }
+
+  /**
+   * `forHost` reveals unrevealed board answer text/value — see
+   * `Round4.view`'s doc comment. Defaults to `false` (the player-safe shape)
+   * so `sessionView()` and every broadcast EVENT payload — which reach every
+   * connection identically, unlike a per-connection snapshot request — keep
+   * the original secrecy guarantee automatically. Only `room.ts`'s Host
+   * snapshot path may ever pass `true`, matching how `round1View`'s own
+   * `forHost` parameter is scoped.
+   */
+  round4View(forHost = false): Round4StateView | null {
+    return this.#round4 === null ? null : this.#round4.view(forHost);
+  }
+
+  // ================== SUDDEN DEATH — §21 / D-034 ==================
+  // A face-off sequence between two named teams (the tied leaders, or
+  // whichever teams the Host names when ending a round early — the project
+  // owner wants that control at ANY point, not only a genuine BB tie).
+  // Deliberately outside the generic challenge/BB pipeline Round 4 uses:
+  // §21 (unchanged by D-034) bars cards, wagers and multipliers entirely, and
+  // nothing is paid for winning a Sudden Death face-off — only the OVERALL
+  // game ends, with a winner, once a team takes two in a row.
+  // ==================================================================
+
+  /**
+   * Force the phase to `ROUND_COMPLETE` from wherever it currently is, one
+   * legal hop at a time, using the SAME transitions `lifecycle.ts` already
+   * allows for ordinary play — never a shortcut past a rule, only walking
+   * the existing graph to its `ROUND_COMPLETE` node. A running challenge is
+   * abandoned mid-flight if one is open (§21 bars everything mid-round
+   * anyway once Sudden Death actually starts), matching how ending a round
+   * early inherently means whatever was in progress does not finish
+   * normally.
+   */
+  #walkPhaseToRoundComplete(): Result<true> {
+    const path: Readonly<Record<GamePhase, GamePhase | null>> = {
+      BOOT: null,
+      LOBBY: null,
+      TEAM_LOCK: null,
+      ROUND_INTRO: 'CHALLENGE_INTRO',
+      MARKET: 'CHALLENGE_INTRO',
+      CHALLENGE_INTRO: 'ACTIVE_PLAY',
+      ACTIVE_PLAY: 'RESULT',
+      HOST_REVIEW: 'RESULT',
+      RESULT: 'ROUND_COMPLETE',
+      ROUND_COMPLETE: null,
+      SUDDEN_DEATH: null,
+      PAUSED: null,
+      GAME_OVER: null,
+    };
+
+    // Bounded by the phase count — this table has no cycles, so a bug here
+    // would be an infinite loop rather than a silent wrong answer, and this
+    // guard turns that into a clear rejection instead.
+    for (let i = 0; i < 10; i += 1) {
+      if (this.#phase.phase === 'ROUND_COMPLETE') return ok(true);
+      const next = path[this.#phase.phase];
+      if (next === null) {
+        return err(
+          rejection('WRONG_STATE', 'Cannot reach ROUND_COMPLETE from the current phase.', {
+            phase: this.#phase.phase,
+          }),
+        );
+      }
+      const moved = this.advancePhase(next);
+      if (!moved.ok) return err(moved.error);
+    }
+    /* c8 ignore next -- unreachable: the table above has no cycles and always reaches ROUND_COMPLETE or null within 4 hops. */
+    return err(rejection('INTERNAL_ERROR', 'Could not reach ROUND_COMPLETE.'));
+  }
+
+  get suddenDeath(): SuddenDeath | null {
+    return this.#suddenDeath;
+  }
+
+  suddenDeathView(): SuddenDeathStateView | null {
+    return this.#suddenDeath === null ? null : this.#suddenDeath.view();
+  }
+
+  /**
+   * Host begins Sudden Death between exactly two named teams. Callable from
+   * ANY non-terminal, non-paused phase — the Host may force Sudden Death
+   * after any round, not only a genuine BB tie at ROUND_COMPLETE (D-034).
+   *
+   * `SUDDEN_DEATH` is legal only from `ROUND_COMPLETE` in the generic
+   * lifecycle table (protocol/lifecycle.ts), which this method does NOT
+   * change — round-progression rules for every OTHER round stay exactly as
+   * locked. Instead, this walks the same forced multi-step path
+   * `devEnterRound4`/`#devStartRound1` already use to reach a round entry
+   * from an arbitrary mid-round phase, landing on `ROUND_COMPLETE` first,
+   * so Sudden Death's own "any point" request is satisfied without loosening
+   * what any other phase is allowed to do.
+   */
+  beginSuddenDeath(teamIds: readonly [TeamId, TeamId]): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+    if (this.#suddenDeath !== null) {
+      return err(rejection('WRONG_STATE', 'Sudden Death has already started.'));
+    }
+    for (const teamId of teamIds) {
+      if (!this.#teams.has(teamId)) {
+        return err(rejection('NOT_FOUND', 'Unknown team.', { teamId }));
+      }
+    }
+
+    const walked = this.#walkPhaseToRoundComplete();
+    if (!walked.ok) return err(walked.error);
+
+    const moved = this.advancePhase('SUDDEN_DEATH');
+    if (!moved.ok) return err(moved.error);
+
+    const suddenDeath = new SuddenDeath({ clock: this.#clock });
+    const began = suddenDeath.begin(teamIds);
+    if (!began.ok) return err(began.error);
+
+    this.#suddenDeath = suddenDeath;
+
+    return ok({
+      type: SUDDEN_DEATH_EVENTS.SUDDEN_DEATH_STARTED,
+      payload: {
+        roundIndex: SUDDEN_DEATH_ROUND_INDEX,
+        suddenDeath: suddenDeath.view(),
+        phase: this.#phase.phase,
+      },
+    });
+  }
+
+  /** Host reveals the next face-off's question and opens the buzzer. */
+  startSuddenDeathFaceoff(question: Round4Survey): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const suddenDeath = this.#suddenDeath;
+    if (suddenDeath === null) return err(rejection('WRONG_STATE', 'Sudden Death has not started.'));
+
+    const started = suddenDeath.startFaceoff(question);
+    if (!started.ok) return err(started.error);
+
+    this.#syncSuddenDeathActivePlayers();
+
+    return ok({
+      type: SUDDEN_DEATH_EVENTS.SUDDEN_DEATH_FACEOFF_REVEALED,
+      payload: { suddenDeath: suddenDeath.view() },
+    });
+  }
+
+  /** A face-off participant buzzes in. Race-safety lives in `SuddenDeath.buzz`. */
+  submitSuddenDeathBuzz(teamId: TeamId): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const suddenDeath = this.#suddenDeath;
+    if (suddenDeath === null) return err(rejection('WRONG_STATE', 'Sudden Death has not started.'));
+
+    const buzzed = suddenDeath.buzz(teamId);
+    if (!buzzed.ok) return err(buzzed.error);
+
+    return ok({
+      type: SUDDEN_DEATH_EVENTS.SUDDEN_DEATH_BUZZED,
+      payload: { teamId, faceoff: buzzed.value, suddenDeath: suddenDeath.view() },
+    });
+  }
+
+  /**
+   * Rule the buzzed team's answer. `correct` is resolved by the caller —
+   * deterministic grading against the question's board, or an explicit Host
+   * override — exactly like Round 4's own `ruleRound4FaceoffAnswer`.
+   *
+   * A team taking their SECOND consecutive win ends the whole game here —
+   * GAME_OVER, with `suddenDeath.winnerTeamId` set. §21 declares no other
+   * prize for winning Sudden Death beyond being the overall winner.
+   */
+  ruleSuddenDeathAnswer(input: {
+    readonly teamId: TeamId;
+    readonly correct: boolean;
+  }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const suddenDeath = this.#suddenDeath;
+    if (suddenDeath === null) return err(rejection('WRONG_STATE', 'Sudden Death has not started.'));
+
+    const ruled = suddenDeath.ruleFaceoffAnswer(input);
+    if (!ruled.ok) return err(ruled.error);
+
+    // The face-off is decided — nobody is required to act until the Host
+    // reveals the next one, so a disconnect now should not pause the game.
+    this.#activePlayers.clear();
+
+    if (ruled.value.streakWinnerTeamId !== null) {
+      this.advancePhase('GAME_OVER');
+    }
+
+    return ok({
+      type: SUDDEN_DEATH_EVENTS.SUDDEN_DEATH_FACEOFF_RESOLVED,
+      payload: {
+        teamId: input.teamId,
+        faceoff: ruled.value.faceoff,
+        winnerTeamId: ruled.value.streakWinnerTeamId,
+        suddenDeath: suddenDeath.view(),
+        phase: this.#phase.phase,
+      },
+    });
+  }
+
+  /**
+   * Neither team buzzed before the reading window closed (or the face-off
+   * otherwise resolves with no decision). §21 / D-034 — no penalty to
+   * either streak; the Host reveals a fresh face-off next.
+   */
+  recordSuddenDeathNoDecision(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const suddenDeath = this.#suddenDeath;
+    if (suddenDeath === null) return err(rejection('WRONG_STATE', 'Sudden Death has not started.'));
+
+    const recorded = suddenDeath.recordNoDecision();
+    if (!recorded.ok) return err(recorded.error);
+
+    this.#activePlayers.clear();
+
+    return ok({
+      type: SUDDEN_DEATH_EVENTS.SUDDEN_DEATH_FACEOFF_RESOLVED,
+      payload: { faceoff: recorded.value, suddenDeath: suddenDeath.view() },
+    });
+  }
+
+  suddenDeathFaceoffWindowExpired(): boolean {
+    if (!this.#started || this.paused) return false;
+    return this.#suddenDeath?.faceoffAnswerWindowExpired() ?? false;
+  }
+
+  /**
+   * Begin Round 4: freeze the entering BB ranking. §20 step 1, D-008.
+   *
+   * THE FREEZE HAPPENS HERE, ONCE. `standings` is derived from the LIVE ledger
+   * at this exact moment and handed to `Round4.begin`, which never reads BB
+   * again — so a later BB change (Maco Mail, a card, a steal) can never
+   * retroactively re-seed who was entering 1st/2nd/3rd.
+   */
+  beginRound4(maxStrikes?: number): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    if (this.#roundIndex !== ROUND4_ROUND_INDEX) {
+      return err(
+        rejection('WRONG_STATE', 'The game is not on Round 4.', {
+          roundIndex: this.#roundIndex,
+          expected: ROUND4_ROUND_INDEX,
+        }),
+      );
+    }
+    if (this.#round4 !== null) {
+      return err(rejection('WRONG_STATE', 'Round 4 has already started.'));
+    }
+
+    // Best-first by CURRENT live BB, read exactly once.
+    const standings = [...this.#teams.keys()]
+      .map((id) => asTeamId(id))
+      .sort((a, b) => this.#ledger.balanceOf(b) - this.#ledger.balanceOf(a));
+
+    const round = new Round4({
+      clock: this.#clock,
+      ...(maxStrikes === undefined ? {} : { maxStrikes }),
+    });
+    const began = round.begin(standings);
+    if (!began.ok) return err(began.error);
+
+    round.recordEnteringBb(
+      new Map(standings.map((teamId) => [teamId as string, this.#ledger.balanceOf(teamId)])),
+    );
+
+    const startedMatchup = round.beginFirstMatchup();
+    if (!startedMatchup.ok) return err(startedMatchup.error);
+
+    this.#round4 = round;
+
+    return ok({
+      type: ROUND4_EVENTS.ROUND4_STARTED,
+      payload: {
+        roundIndex: ROUND4_ROUND_INDEX,
+        round4: round.view(),
+      },
+    });
+  }
+
+  /**
+   * Prepare the generic challenge for the next Round 4 survey and reveal it.
+   *
+   * `survey` COMES FROM THE CALLER — §13's "the game supplies challenge
+   * content" applies here too; the engine neither stores a pack nor picks one.
+   */
+  startRound4Survey(
+    survey: Round4Survey,
+    participantTeamIds: readonly [TeamId, TeamId],
+  ): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round4;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+
+    const prepared = this.prepareChallenge({ challengeType: 'FAMILY_FEUD_SURVEY' });
+    if (!prepared.ok) return err(prepared.error);
+
+    const started = this.startChallenge();
+    if (!started.ok) return err(started.error);
+
+    const revealed = round.startFaceoff(survey, participantTeamIds);
+    if (!revealed.ok) return err(revealed.error);
+
+    this.#syncRound4ActivePlayers();
+
+    return ok({
+      type: ROUND4_EVENTS.ROUND4_SURVEY_REVEALED,
+      payload: {
+        challengeId: this.#challenge?.challengeId ?? null,
+        round4: round.view(),
+      },
+    });
+  }
+
+  /** A face-off participant buzzes in. Race-safety lives in `Round4.buzz`. */
+  submitRound4Buzz(teamId: TeamId): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round4;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+
+    const buzzed = round.buzz(teamId);
+    if (!buzzed.ok) return err(buzzed.error);
+
+    return ok({
+      type: ROUND4_EVENTS.ROUND4_FACEOFF_BUZZED,
+      payload: { teamId, faceoff: buzzed.value, round4: round.view() },
+    });
+  }
+
+  /**
+   * Rule a submitted face-off answer. `matchedRank` is resolved by the caller
+   * (deterministic grading, or an explicit Host override) against the board —
+   * this method never sees the board's text either.
+   */
+  ruleRound4FaceoffAnswer(input: {
+    readonly teamId: TeamId;
+    readonly matchedRank: number | null;
+  }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round4;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+
+    const ruled = round.ruleFaceoffAnswer(input);
+    if (!ruled.ok) return err(ruled.error);
+
+    return ok({
+      type: ROUND4_EVENTS.ROUND4_FACEOFF_ANSWER_SUBMITTED,
+      payload: { teamId: input.teamId, faceoff: ruled.value, round4: round.view() },
+    });
+  }
+
+  /**
+   * Host starts the opponent's one-shot 3s clock. Live play: the buzzer
+   * winner's answer missed #1, but the opponent's chance does not start
+   * itself — the Host decides when, and sometimes whether it is even needed.
+   */
+  startRound4OpponentChanceTimer(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round4;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+
+    const started = round.startOpponentChanceTimer();
+    if (!started.ok) return err(started.error);
+
+    return ok({
+      type: ROUND4_EVENTS.ROUND4_OPPONENT_CHANCE_TIMER_STARTED,
+      payload: { faceoff: started.value, round4: round.view() },
+    });
+  }
+
+  /** The face-off winner chooses PLAY or PASS. §19. */
+  chooseRound4PlayOrPass(input: {
+    readonly teamId: TeamId;
+    readonly decision: Round4PlayDecision;
+  }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round4;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+
+    const chosen = round.choosePlayOrPass(input);
+    if (!chosen.ok) return err(chosen.error);
+
+    this.#syncRound4ActivePlayers();
+
+    return ok({
+      type: ROUND4_EVENTS.ROUND4_PLAY_OR_PASS_CHOSEN,
+      payload: {
+        teamId: input.teamId,
+        decision: input.decision,
+        controllingTeamId: chosen.value.controllingTeamId,
+        round4: round.view(),
+      },
+    });
+  }
+
+  /** Host/room supplies the controlling team's player order for board play. */
+  setRound4BoardPlayOrder(playerOrder: readonly string[]): Result<true> {
+    const round = this.#round4;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+    return round.setBoardPlayOrder(playerOrder);
+  }
+
+  /**
+   * Host starts the current board turn's 5s clock. Live play: spoken
+   * answers, so the Host paces when each turn's timer actually starts.
+   */
+  startRound4BoardTurnTimer(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round4;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+
+    const started = round.startBoardTurnTimer();
+    if (!started.ok) return err(started.error);
+
+    return ok({
+      type: ROUND4_EVENTS.ROUND4_BOARD_TURN_TIMER_STARTED,
+      payload: { boardPlay: started.value, round4: round.view() },
+    });
+  }
+
+  /**
+   * Host cancels the running board turn timer WITHOUT recording a strike —
+   * live play: someone answered before the 5s window ran out.
+   */
+  cancelRound4BoardTurnTimer(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round4;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+
+    const cancelled = round.cancelBoardTurnTimer();
+    if (!cancelled.ok) return err(cancelled.error);
+
+    return ok({
+      type: ROUND4_EVENTS.ROUND4_BOARD_TURN_TIMER_CANCELLED,
+      payload: { boardPlay: cancelled.value, round4: round.view() },
+    });
+  }
+
+  /**
+   * Host directly sets the current turn's strike count — live jurisdiction,
+   * at any time. If the new count clears the ceiling and the steal has not
+   * already been opened, the caller (`Room`) opens it exactly as a normal
+   * strike does.
+   */
+  setRound4Strikes(count: number): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round4;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+
+    const set = round.setStrikes(count);
+    if (!set.ok) return err(set.error);
+
+    return ok({
+      type: ROUND4_EVENTS.ROUND4_STRIKES_SET,
+      payload: {
+        boardPlay: set.value.boardPlay,
+        stealTriggered: set.value.stealTriggered,
+        round4: round.view(),
+      },
+    });
+  }
+
+  /**
+   * Reveal a correct, unrevealed board answer. `answerId` is resolved by the
+   * caller from the submitted text, exactly like the face-off's matched rank.
+   */
+  revealRound4BoardAnswer(answerId: string): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round4;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+
+    const revealed = round.revealBoardAnswer(answerId);
+    if (!revealed.ok) return err(revealed.error);
+
+    return ok({
+      type: ROUND4_EVENTS.ROUND4_BOARD_ANSWER_REVEALED,
+      payload: { board: revealed.value.board, value: revealed.value.value, round4: round.view() },
+    });
+  }
+
+  /** Record one strike. Three strikes hands the opposing team a steal. §19. */
+  recordRound4Strike(reason: Round4StrikeReason): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round4;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+
+    const recorded = round.recordStrike(reason);
+    if (!recorded.ok) return err(recorded.error);
+
+    return ok({
+      type: ROUND4_EVENTS.ROUND4_STRIKE_RECORDED,
+      payload: {
+        reason,
+        boardPlay: recorded.value.boardPlay,
+        stealTriggered: recorded.value.stealTriggered,
+        round4: round.view(),
+      },
+    });
+  }
+
+  /** Open the steal once three strikes have been recorded. §19. */
+  startRound4Steal(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round4;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+
+    const started = round.startSteal();
+    if (!started.ok) return err(started.error);
+
+    this.#syncRound4ActivePlayers();
+
+    return ok({
+      type: ROUND4_EVENTS.ROUND4_STEAL_STARTED,
+      payload: { steal: started.value, round4: round.view() },
+    });
+  }
+
+  /**
+   * Host starts the steal's 30s confer/answer clock. Live play: the Host
+   * announces the steal to the stealing team first, then starts this.
+   */
+  startRound4StealTimer(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round4;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+
+    const started = round.startStealTimer();
+    if (!started.ok) return err(started.error);
+
+    return ok({
+      type: ROUND4_EVENTS.ROUND4_STEAL_TIMER_STARTED,
+      payload: { steal: started.value, round4: round.view() },
+    });
+  }
+
+  /**
+   * Lock the stealing team's wager. §19 — up to 50% of CURRENT BB.
+   *
+   * THE CAP IS THE EXISTING GENERIC WAGER, UNCHANGED. `#shared.deals.proposeWager`
+   * both validates the 50% ceiling and moves nothing yet — a wager only pays out
+   * on `resolveRound4Steal`. This is the one and only wager implementation Round
+   * 4 uses; nothing here recomputes the cap.
+   */
+  lockRound4StealWager(input: { readonly teamId: TeamId; readonly amount: number }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round4;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+
+    const proposed = this.#shared.deals.proposeWager({
+      teamId: input.teamId,
+      amount: input.amount,
+      contextRef: this.#challenge?.challengeId ?? null,
+    });
+    if (!proposed.ok) return err(proposed.error);
+
+    const locked = round.lockStealWager({ wagerId: proposed.value.wagerId, amount: input.amount });
+    if (!locked.ok) {
+      // Round4 refused (wrong stage, already locked) — undo the wager so a
+      // rejected lock leaves no orphaned live wager behind.
+      this.#shared.deals.cancelWager(proposed.value.wagerId);
+      return err(locked.error);
+    }
+
+    return ok({
+      type: ROUND4_EVENTS.ROUND4_STEAL_WAGER_LOCKED,
+      payload: { steal: locked.value, wager: proposed.value, round4: round.view() },
+    });
+  }
+
+  /** The largest wager the stealing team could legally lock right now. */
+  round4MaxStealWagerFor(teamId: TeamId): number {
+    return this.#shared.deals.maxWagerFor(teamId);
+  }
+
+  /**
+   * Rule the steal's one final answer, settle the wager, and pay the survey
+   * pot to whichever side actually won it — exactly once.
+   *
+   * §19: correct -> stealing team wins the accumulated points AND the wager;
+   * wrong -> stealing team loses the wager, original team gets the points.
+   * `Round4.ruleSteal` refuses a second call on an already-resolved steal, so a
+   * replayed intent settles nothing twice; the wager itself is ALSO guarded by
+   * `Deals.resolveWager`'s own "already resolved" check.
+   */
+  resolveRound4Steal(correct: boolean): Result<{
+    readonly change: EngineChange;
+    readonly ledgerEntries: readonly BbLedgerEntry[];
+  }> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round4;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+
+    const ruled = round.ruleSteal(correct);
+    if (!ruled.ok) return err(ruled.error);
+
+    let wagerResult = null;
+    const wagerId = ruled.value.steal.wagerId;
+    if (wagerId !== null) {
+      const resolved = this.#shared.deals.resolveWager({ wagerId, won: correct });
+      if (resolved.ok) wagerResult = resolved.value;
+    }
+
+    const resolvedSurvey = this.#resolveRound4Survey(ruled.value.pointsAwardedTo);
+    if (!resolvedSurvey.ok) return err(resolvedSurvey.error);
+
+    return ok({
+      change: {
+        type: ROUND4_EVENTS.ROUND4_STEAL_RESOLVED,
+        payload: {
+          correct,
+          steal: ruled.value.steal,
+          wager: wagerResult,
+          pointsAwardedTo: ruled.value.pointsAwardedTo,
+          ...resolvedSurvey.value.payload,
+        },
+      },
+      ledgerEntries: resolvedSurvey.value.ledgerEntries,
+    });
+  }
+
+  /**
+   * Resolve the current survey once the controlling team has cleared the
+   * board with no steal needed — the board's own win path, distinct from a
+   * steal settling it. Same underlying resolver, so BB is paid exactly once
+   * either way.
+   */
+  resolveRound4BoardCleared(winningTeamId: TeamId): Result<{
+    readonly change: EngineChange;
+    readonly ledgerEntries: readonly BbLedgerEntry[];
+  }> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round4;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+    if (!round.boardCleared()) {
+      return err(rejection('WRONG_STATE', 'The board has not been cleared.'));
+    }
+
+    const resolvedSurvey = this.#resolveRound4Survey(winningTeamId);
+    if (!resolvedSurvey.ok) return err(resolvedSurvey.error);
+
+    return ok({
+      change: {
+        type: ROUND4_EVENTS.ROUND4_SURVEY_RESOLVED,
+        payload: resolvedSurvey.value.payload,
+      },
+      ledgerEntries: resolvedSurvey.value.ledgerEntries,
+    });
+  }
+
+  /**
+   * Shared survey-resolution core. PAYS THE POT EXACTLY ONCE.
+   *
+   * `Round4.resolveSurvey` refuses a second call on an already-resolved survey
+   * (its own guard), and this method's own `resolveChallenge` call refuses a
+   * second resolution of the same generic challenge — two independent guards
+   * against a double-pay, matching Round 1 and Round 3's discipline.
+   *
+   * THE SCORING GATE IS APPLIED HERE, NOT INSIDE `Round4`. §20 step 6 — a
+   * matchup loser "cannot earn further Family Feud BB for the remainder of
+   * Round 4", but nothing in `Round4.resolveSurvey` reads the gate; it always
+   * returns the full base award for whichever side the caller names as
+   * winner. So a gated team is never named `winningTeamId` here in the first
+   * place (the room routes a resolved survey/steal for a gated team to a
+   * Host-notified no-op rather than calling this) — but as a defence in depth
+   * this also floors the AWARDED bb at 0 for a gated team, never blocking the
+   * survey from resolving (it must still clear so the next one can be dealt).
+   */
+  #resolveRound4Survey(winningTeamId: TeamId): Result<{
+    readonly payload: Record<string, unknown>;
+    readonly ledgerEntries: readonly BbLedgerEntry[];
+  }> {
+    const round = this.#round4;
+    /* c8 ignore next 3 -- unreachable: every caller already checked round4 !== null. */
+    if (round === null) {
+      return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+    }
+
+    const resolved = round.resolveSurvey(winningTeamId);
+    if (!resolved.ok) return err(resolved.error);
+
+    const gated = round.isScoringGated(winningTeamId);
+    const award = gated ? 0 : resolved.value.baseAward;
+
+    const challengeResolved = this.resolveChallenge({
+      winningTeamIds: award > 0 ? [winningTeamId] : [],
+      bbDeltas: { [winningTeamId]: award },
+      decidedByHost: true,
+      completion: 'completed',
+      note: gated ? 'Family Feud survey (scoring-gated)' : 'Family Feud survey',
+    });
+    if (!challengeResolved.ok) return err(challengeResolved.error);
+
+    const applied = challengeResolved.value.change.payload['result'] as GameChallengeResult;
+    const awardedBb = applied.bbApplied[winningTeamId] ?? award;
+
+    return ok({
+      payload: {
+        winningTeamId,
+        awardedBb,
+        doubled: resolved.value.doubled,
+        gated,
+        challengeResult: applied,
+        teams: this.teams(),
+        round4: round.view(),
+        surveysPlayedInMatchup: round.surveysPlayedInMatchup,
+      },
+      ledgerEntries: challengeResolved.value.ledgerEntries,
+    });
+  }
+
+  /** Decide the FIRST matchup (2nd vs 3rd) after its two surveys. §20 step 9. */
+  decideRound4FirstMatchup(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round4;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+
+    const decided = round.decideFirstMatchup();
+    if (!decided.ok) return err(decided.error);
+
+    return ok({
+      type: ROUND4_EVENTS.ROUND4_MATCHUP_RESOLVED,
+      payload: {
+        advancingTeamId: decided.value.advancingTeamId,
+        tied: decided.value.tied,
+        round4: round.view(),
+      },
+    });
+  }
+
+  /** Start the FINAL matchup: the FIRST matchup's winner faces entering 1st. */
+  beginRound4FinalMatchup(): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round4;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+
+    const advancing = round.view().matchupWinnerTeamId;
+    if (advancing === null) {
+      return err(rejection('WRONG_STATE', 'The FIRST Round 4 matchup has not resolved.'));
+    }
+
+    const started = round.beginFinalMatchup(advancing);
+    if (!started.ok) return err(started.error);
+
+    return ok({
+      type: ROUND4_EVENTS.ROUND4_STARTED,
+      payload: { round4: round.view() },
+    });
+  }
+
+  /**
+   * Mark Round 4 complete once every survey of the FINAL matchup is played.
+   * Highest BB wins — §21 — decided by the room/Host from live balances; this
+   * only records which team that is against the round's own state.
+   */
+  completeRound4(winningTeamId: TeamId): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round4;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+
+    round.markComplete(winningTeamId);
+
+    return ok({
+      type: ROUND4_EVENTS.ROUND4_COMPLETED,
+      payload: { winningTeamId, round4: round.view() },
+    });
+  }
+
+  /**
+   * Whether a team may currently play a Bacchanal card into Round 4.
+   *
+   * §19 "Inactive third team" / D-033 — only the two teams in the CURRENT
+   * matchup may play cards into it; the sitting-out third team's hand is
+   * untouched. Checked by the room before routing to `playBacchanalCard`, so
+   * an inactive team's card play never reaches the generic Clash pipeline.
+   */
+  round4TeamMayPlayCards(teamId: TeamId): boolean {
+    const round = this.#round4;
+    if (round === null) return true;
+    return round.matchupTeamIds.includes(teamId);
+  }
+
+  /**
+   * Apply Steups! to a just-given valid opposing board answer. §19 / D-033.
+   *
+   * THE CARD ITSELF ALREADY RESOLVED. The room calls this only after
+   * `#shared.resolveClash()` reports a won `STEUPS` effect — this method never
+   * plays a card or opens a Clash; it applies the one Family-Feud-specific
+   * consequence no generic system can express, exactly as the doc comment on
+   * `Round4.applySteups` describes.
+   */
+  applyRound4Steups(input: {
+    readonly answerId: string;
+    readonly defendingTeamId: TeamId;
+  }): Result<EngineChange> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    const round = this.#round4;
+    if (round === null) return err(rejection('WRONG_STATE', 'Round 4 has not started.'));
+
+    const applied = round.applySteups(input);
+    if (!applied.ok) return err(applied.error);
+
+    return ok({
+      type: SHARED_EVENTS.CARD_EFFECT_APPLIED,
+      payload: {
+        cardType: 'STEUPS',
+        answerId: input.answerId,
+        board: applied.value.board,
+        round4: round.view(),
+      },
+    });
+  }
+
+  /**
+   * Whether a FORGIVE MEH! (or Market Second Chance) retry was granted for a
+   * team on the CURRENT challenge, and not yet consumed by a ruling.
+   *
+   * §19/D-033 — "gives that player one final retry, before the strike is
+   * applied." `Advantages.useForgiveMehRetry` already spends the shared retry
+   * budget the instant the card's Clash resolves (`SharedSystems#applyEffect`,
+   * via `pollClashResolution`); this is a read-only check of THAT spend, so the
+   * room can tell — after a wrong board answer — whether this team is owed a
+   * retry before it commits a strike.
+   */
+  round4HasForgiveMehRetry(teamId: TeamId): boolean {
+    const usage = this.#shared.advantages.usageFor(teamId);
+    return usage.retriesUsed > 0 && usage.retrySource === 'forgive_meh';
+  }
+
+  /** Whether the current Round 4 face-off's 3-second answer window has run out. */
+  round4FaceoffWindowExpired(): boolean {
+    if (!this.#started || this.paused) return false;
+    return this.#round4?.faceoffAnswerWindowExpired() ?? false;
+  }
+
+  /** Whether the current Round 4 board turn's 5-second window has run out. */
+  round4BoardTurnExpired(): boolean {
+    if (!this.#started || this.paused) return false;
+    return this.#round4?.boardTurnExpired() ?? false;
+  }
+
+  /** Whether the current Round 4 steal's 30-second confer window has run out. */
+  round4StealConferExpired(): boolean {
+    if (!this.#started || this.paused) return false;
+    return this.#round4?.stealConferExpired() ?? false;
+  }
+
+  /**
+   * Keep the active-player set in step with Round 4's own sub-phase.
+   *
+   * D-021 — "active" means required by the CURRENT challenge. Round 4's own
+   * state is entirely team-level (any member of the required team may act:
+   * whoever holds the shared phone buzzes, confers on a steal, or answers in
+   * turn) so every member of the currently-required team(s) is marked active,
+   * mirroring `#syncRound1ActivePlayers`'s reasoning rather than tracking one
+   * individual player.
+   */
+  #syncRound4ActivePlayers(): void {
+    const round = this.#round4;
+    if (round === null) return;
+    const current = round.view().current;
+    if (current === null) {
+      this.#activePlayers.clear();
+      return;
+    }
+
+    let requiredTeamIds: readonly TeamId[] = [];
+    if (current.progress === 'faceoff' && current.faceoff !== null) {
+      requiredTeamIds = current.faceoff.participantTeamIds;
+    } else if (current.progress === 'board_play' && current.boardPlay !== null) {
+      requiredTeamIds = [current.boardPlay.controllingTeamId];
+    } else if (current.progress === 'steal' && current.steal !== null) {
+      requiredTeamIds = [current.steal.stealingTeamId];
+    }
+
+    const wanted = requiredTeamIds.flatMap(
+      (teamId) => this.#teams.get(teamId)?.memberIds ?? [],
+    );
+    this.#activePlayers.clear();
+    for (const playerId of wanted) this.#activePlayers.add(playerId);
+  }
+
+  /**
+   * Sudden Death's own active-player sync. Both participant teams are
+   * "active" for the whole of a face-off (either side may buzz) — mirrors
+   * `#syncRound4ActivePlayers`'s face-off branch, simplified since Sudden
+   * Death has no board play or steal to narrow the set further.
+   */
+  #syncSuddenDeathActivePlayers(): void {
+    const suddenDeath = this.#suddenDeath;
+    if (suddenDeath === null) return;
+    const current = suddenDeath.view().current;
+    this.#activePlayers.clear();
+    if (current === null) return;
+
+    const wanted = current.participantTeamIds.flatMap(
+      (teamId) => this.#teams.get(teamId)?.memberIds ?? [],
+    );
+    for (const playerId of wanted) this.#activePlayers.add(playerId);
+  }
+
+  /**
+   * DEVELOPMENT ONLY — walk the engine from game start to the Round 4 intro.
+   *
+   * Same discipline as `devEnterRound3`: real transitions, a clearly-named
+   * placeholder challenge per skipped round, and the SAME `beginRound4` a real
+   * Round 3 completion will eventually call.
+   */
+  devEnterRound4(maxStrikes?: number): Result<readonly EngineChange[]> {
+    const guard = this.#requireRunning();
+    if (guard !== null) return err(guard);
+
+    if (!this.#options.devTools) {
+      return err(
+        rejection('ILLEGAL_ACTION', 'Development controls are disabled on this server.'),
+      );
+    }
+    if (this.#round4 !== null) {
+      return err(rejection('WRONG_STATE', 'Round 4 has already started.'));
+    }
+    if (this.#roundIndex > ROUND4_ROUND_INDEX) {
+      return err(
+        rejection('WRONG_STATE', 'The game is already past Round 4.', {
+          roundIndex: this.#roundIndex,
+        }),
+      );
+    }
+
+    const changes: EngineChange[] = [];
+
+    while (this.#roundIndex < ROUND4_ROUND_INDEX) {
+      if (this.#phase.phase === 'ROUND_INTRO') {
+        const intro = this.advancePhase('CHALLENGE_INTRO');
+        if (!intro.ok) return err(intro.error);
+        changes.push(intro.value);
+
+        const prepared = this.prepareChallenge({
+          challengeType: DEV_ROUND_SKIP_CHALLENGE_TYPE,
+        });
+        if (!prepared.ok) return err(prepared.error);
+        changes.push(prepared.value);
+
+        const started = this.startChallenge();
+        if (!started.ok) return err(started.error);
+        changes.push(started.value);
+
+        const resolved = this.resolveChallenge({
+          completion: 'abandoned',
+          decidedByHost: true,
+          note: 'Development: skipped to Round 4.',
+        });
+        if (!resolved.ok) return err(resolved.error);
+        changes.push(resolved.value.change);
+      }
+
+      if (this.#phase.phase !== 'ROUND_COMPLETE') {
+        const complete = this.advancePhase('ROUND_COMPLETE');
+        if (!complete.ok) return err(complete.error);
+        changes.push(complete.value);
+      }
+
+      const next = this.advancePhase('ROUND_INTRO');
+      if (!next.ok) return err(next.error);
+      changes.push(next.value);
+    }
+
+    const began = this.beginRound4(maxStrikes);
     if (!began.ok) return err(began.error);
     changes.push(began.value);
 

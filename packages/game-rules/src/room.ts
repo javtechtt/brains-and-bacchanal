@@ -23,6 +23,13 @@ import {
   type Round1Verdict,
   ROUND3_INTENTS,
   isRound3ChallengeType,
+  ROUND4_INTENTS,
+  ROUND4_STRIKE_REASONS,
+  SUDDEN_DEATH_INTENTS,
+  isRound4DoubledQuestion,
+  type Round4PlayDecision,
+  type Round4StrikeReason,
+  type CardChallengeKind,
   SHARED_INTENTS,
   teamsForMode,
   toPublicPlayer,
@@ -62,6 +69,15 @@ import {
   UnavailableSemanticJudge,
   type AnswerSemanticJudge,
 } from './round1-grading.js';
+import {
+  createTestRound4ContentSource,
+  type Round4ContentSource,
+} from './round4-content.js';
+import { matchesTopAnswer, matchRound4Answer } from './round4-grading.js';
+import {
+  createTestSuddenDeathContentSource,
+  type SuddenDeathContentSource,
+} from './sudden-death-content.js';
 import { GameEngine, type EngineChange, type StartingTeam } from './game-engine.js';
 import { IntentRegistry } from './idempotency.js';
 
@@ -138,6 +154,22 @@ export interface RoomOptions {
    */
   readonly round1ContentSource?: Round1ContentSource;
   /**
+   * Where Round 4 (Family Feud) survey boards come from. GAME_RULES_LOCKED.md
+   * §19, D-012. Phase 7D-A2.
+   *
+   * Defaults to the TEST source during development. Its own field for the same
+   * reason `contentSource` and `round1ContentSource` are separate: a survey
+   * carries a whole ranked board, a shape neither of the other two sources has.
+   */
+  readonly round4ContentSource?: Round4ContentSource;
+  /**
+   * Sudden Death content. Phase 7D-B2. Defaults to the TEST source. Its own
+   * field for the same reason as `round4ContentSource` — a question carries
+   * a whole ranked board, same shape as a Round 4 survey but a separate
+   * cursor so the two never interfere.
+   */
+  readonly suddenDeathContentSource?: SuddenDeathContentSource;
+  /**
    * The AI semantic judge for genuinely ambiguous Round 1 answers.
    *
    * Defaults to one that refuses to guess, which is every environment today —
@@ -175,6 +207,10 @@ export class Room {
   readonly #content: Round3ContentSource;
   /** Round 1 content. One per room, so cursors never leak between games. */
   readonly #round1Content: Round1ContentSource;
+  /** Round 4 (Family Feud) content. One per room. Phase 7D-A2. */
+  readonly #round4Content: Round4ContentSource;
+  /** Sudden Death content. One per room. Phase 7D-B2. */
+  readonly #suddenDeathContent: SuddenDeathContentSource;
   readonly #judge: AnswerSemanticJudge;
   /**
    * Answers waiting on the AI judge.
@@ -213,6 +249,9 @@ export class Room {
     this.#options = options;
     this.#content = options.contentSource ?? createTestContentSource();
     this.#round1Content = options.round1ContentSource ?? createTestRound1ContentSource();
+    this.#round4Content = options.round4ContentSource ?? createTestRound4ContentSource();
+    this.#suddenDeathContent =
+      options.suddenDeathContentSource ?? createTestSuddenDeathContentSource();
     this.#judge = options.semanticJudge ?? new UnavailableSemanticJudge();
     this.#clock = options.clock;
     this.#log = new EventLog(options.roomId, options.clock);
@@ -382,10 +421,22 @@ export class Room {
         // Phase 7C — the Host sees every submitted answer, because the Host
         // grades them (spec §14). The canonical answer still appears only once
         // the question is revealed.
+        //
+        // Phase "live answers" (7D-B2) — Round 4 is hosted live: the Host
+        // reads the survey question aloud and matches a SPOKEN answer to a
+        // board slot, which is impossible against a board of blanks. Scoped
+        // the same way as Round 1's canonical answer above: this path is the
+        // ONLY place `forHost: true` is ever passed, a per-connection snapshot
+        // request, never a broadcast event (those keep the player-safe
+        // default so every connection receives an identical, safe payload).
         game:
           base.game === null
             ? null
-            : { ...base.game, round1: this.#game.round1View(null, null, true) },
+            : {
+                ...base.game,
+                round1: this.#game.round1View(null, null, true),
+                round4: this.#game.round4View(true),
+              },
       };
       return hostSnapshot;
     }
@@ -682,6 +733,113 @@ export class Room {
       }
     }
 
+    // Phase 7D-A2: Round 4's own deadlines, polled the same way — a survey's
+    // timer expiring is a fact, never a verdict (D-022), so each one hands the
+    // moment to the SAME authoritative path a manual Host resolution uses
+    // rather than a separate ad hoc timeout branch.
+    events.push(...this.#pollRound4Timers());
+
+    // Phase 7D-B2: Sudden Death's face-off answer window, polled the same
+    // way — a buzz-then-timeout is an "immediate loss" per §21 / D-034,
+    // routed through the SAME `ruleSuddenDeathAnswer` a Host or player
+    // answer uses, correct:false, exactly like every other timeout in this
+    // codebase (D-022 — a timeout is a fact, never a separately invented
+    // verdict).
+    events.push(...this.#pollSuddenDeathTimers());
+
+    return events;
+  }
+
+  /**
+   * Sudden Death's own deadline. §21 / D-034 — "buzz then fail to answer in
+   * time = immediate loss", so a timeout here is NOT the "opponent gets a
+   * chance" behavior Round 4's own face-off timeout has; it settles the
+   * face-off outright against the team that buzzed, via the identical path
+   * a correct/wrong answer already uses.
+   */
+  #pollSuddenDeathTimers(): EventEnvelope[] {
+    const events: EventEnvelope[] = [];
+    const suddenDeath = this.#game.suddenDeath;
+    if (suddenDeath === null) return events;
+
+    if (this.#game.suddenDeathFaceoffWindowExpired()) {
+      const buzzedTeamId = suddenDeath.view().current?.buzzedTeamId ?? null;
+      if (buzzedTeamId !== null) {
+        const ruled = this.#game.ruleSuddenDeathAnswer({ teamId: buzzedTeamId, correct: false });
+        if (ruled.ok) {
+          events.push(this.#log.append(ruled.value.type, { kind: 'server' }, ruled.value.payload));
+        }
+      }
+    }
+
+    return events;
+  }
+
+  /**
+   * Round 4's three deadlines (§19): a 3-second face-off answer, a 5-second
+   * board turn, a 30-second steal confer. Each expiry routes through the exact
+   * same engine methods a Host ruling would use — `ruleRound4FaceoffAnswer`
+   * with no match, a Host-recorded timeout strike, and a Host-ruled incorrect
+   * steal — so a timeout is never a second, ad hoc resolution path.
+   */
+  #pollRound4Timers(): EventEnvelope[] {
+    const events: EventEnvelope[] = [];
+    const round = this.#game.round4;
+    if (round === null) return events;
+
+    if (this.#game.round4FaceoffWindowExpired()) {
+      const current = round.view().current;
+      const teamId = current?.faceoff?.buzzedTeamId ?? current?.faceoff?.opponentTeamId ?? null;
+      if (teamId !== null) {
+        const ruled = this.#game.ruleRound4FaceoffAnswer({ teamId, matchedRank: null });
+        if (ruled.ok) {
+          events.push(this.#log.append(ruled.value.type, { kind: 'server' }, ruled.value.payload));
+        }
+      }
+    }
+
+    if (this.#game.round4BoardTurnExpired()) {
+      const controllingTeamId = round.view().current?.boardPlay?.controllingTeamId ?? null;
+      // A timeout owed a FORGIVE MEH! retry is never struck automatically —
+      // the Host must still act (the retry window has no server-owned
+      // deadline of its own, matching Round 1's Host-opened retry). Every
+      // other timeout strikes exactly as a Host-recorded one would.
+      if (
+        controllingTeamId === null ||
+        !this.#game.round4HasForgiveMehRetry(controllingTeamId)
+      ) {
+        const struck = this.#game.recordRound4Strike('timeout');
+        if (struck.ok) {
+          events.push(this.#log.append(struck.value.type, { kind: 'server' }, struck.value.payload));
+          const stealTriggered = (
+            struck.value.payload as { readonly stealTriggered?: boolean }
+          ).stealTriggered;
+          if (stealTriggered === true) {
+            const started = this.#game.startRound4Steal();
+            if (started.ok) {
+              events.push(
+                this.#log.append(started.value.type, { kind: 'server' }, started.value.payload),
+              );
+            }
+          }
+        }
+      }
+    }
+
+    // ================== STEAL TIMEOUT: DELIBERATELY NOT AUTO-RESOLVED ========
+    // §19 gives the steal a 30-second confer window and says what a CORRECT or
+    // WRONG answer pays. It does NOT say what a timed-out steal (no answer given
+    // at all) counts as — unlike normal board play, which explicitly names
+    // "failing to answer in time" as one of the strike reasons. Inventing
+    // "timeout = wrong steal" here would be exactly the kind of rule D-022
+    // forbids assuming ("a timeout is not a wrong answer... different challenges
+    // will differ"). `GameEngine.round4StealConferExpired()` exists so a future
+    // Host display can show the window has run out, but NOTHING here resolves
+    // it automatically — only HOST_RULE_STEAL_ANSWER (or a submitted steal
+    // answer) settles it, exactly as every other genuinely undecided timeout in
+    // this codebase ends in a Host decision rather than a guessed one.
+    // ==========================================================================
+
     return events;
   }
 
@@ -850,6 +1008,58 @@ export class Room {
         return this.#startRound1Tiebreak(connectionId, intent);
       case ROUND1_INTENTS.DEV_START_ROUND1:
         return this.#devStartRound1(connectionId, intent);
+
+      // --- Round 4 — Family Feud. Phase 7D-A2. ------------------------------
+      case ROUND4_INTENTS.HOST_BEGIN_ROUND4:
+        return this.#hostBeginRound4(connectionId, intent);
+      case ROUND4_INTENTS.HOST_START_FACEOFF:
+        return this.#hostStartRound4Faceoff(connectionId, intent);
+      case ROUND4_INTENTS.SUBMIT_BUZZ:
+        return this.#submitRound4Buzz(connectionId, intent);
+      case ROUND4_INTENTS.SUBMIT_FACEOFF_ANSWER:
+        return this.#submitRound4FaceoffAnswer(connectionId, intent);
+      case ROUND4_INTENTS.HOST_RULE_FACEOFF_ANSWER:
+        return this.#hostRuleRound4FaceoffAnswer(connectionId, intent);
+      case ROUND4_INTENTS.HOST_START_OPPONENT_CHANCE_TIMER:
+        return this.#hostStartRound4OpponentChanceTimer(connectionId, intent);
+      case ROUND4_INTENTS.CHOOSE_PLAY_OR_PASS:
+        return this.#chooseRound4PlayOrPass(connectionId, intent);
+      case ROUND4_INTENTS.HOST_START_BOARD_TURN_TIMER:
+        return this.#hostStartRound4BoardTurnTimer(connectionId, intent);
+      case ROUND4_INTENTS.HOST_CANCEL_BOARD_TURN_TIMER:
+        return this.#hostCancelRound4BoardTurnTimer(connectionId, intent);
+      case ROUND4_INTENTS.SUBMIT_BOARD_ANSWER:
+        return this.#submitRound4BoardAnswer(connectionId, intent);
+      case ROUND4_INTENTS.HOST_RULE_BOARD_ANSWER:
+        return this.#hostRuleRound4BoardAnswer(connectionId, intent);
+      case ROUND4_INTENTS.HOST_RECORD_STRIKE:
+        return this.#hostRecordRound4Strike(connectionId, intent);
+      case ROUND4_INTENTS.HOST_SET_STRIKES:
+        return this.#hostSetRound4Strikes(connectionId, intent);
+      case ROUND4_INTENTS.HOST_START_STEAL_TIMER:
+        return this.#hostStartRound4StealTimer(connectionId, intent);
+      case ROUND4_INTENTS.SUBMIT_STEAL_WAGER:
+        return this.#submitRound4StealWager(connectionId, intent);
+      case ROUND4_INTENTS.SUBMIT_STEAL_ANSWER:
+        return this.#submitRound4StealAnswer(connectionId, intent);
+      case ROUND4_INTENTS.HOST_RULE_STEAL_ANSWER:
+        return this.#hostRuleRound4StealAnswer(connectionId, intent);
+      case ROUND4_INTENTS.DEV_START_ROUND4:
+        return this.#devStartRound4(connectionId, intent);
+
+      // --- Sudden Death. Phase 7D-B2. GAME_RULES_LOCKED.md §21 / D-034. -----
+      case SUDDEN_DEATH_INTENTS.HOST_BEGIN_SUDDEN_DEATH:
+        return this.#hostBeginSuddenDeath(connectionId, intent);
+      case SUDDEN_DEATH_INTENTS.HOST_START_SUDDEN_DEATH_FACEOFF:
+        return this.#hostStartSuddenDeathFaceoff(connectionId, intent);
+      case SUDDEN_DEATH_INTENTS.SUBMIT_SUDDEN_DEATH_BUZZ:
+        return this.#submitSuddenDeathBuzz(connectionId, intent);
+      case SUDDEN_DEATH_INTENTS.SUBMIT_SUDDEN_DEATH_ANSWER:
+        return this.#submitSuddenDeathAnswer(connectionId, intent);
+      case SUDDEN_DEATH_INTENTS.HOST_RULE_SUDDEN_DEATH_ANSWER:
+        return this.#hostRuleSuddenDeathAnswer(connectionId, intent);
+      case SUDDEN_DEATH_INTENTS.HOST_RECORD_SUDDEN_DEATH_NO_DECISION:
+        return this.#hostRecordSuddenDeathNoDecision(connectionId, intent);
 
       default:
         return this.#reject(rejection('INVALID_REQUEST', 'Unknown intent type.', { type: intent.type }));
@@ -1895,6 +2105,16 @@ export class Room {
   #playBacchanalCard(connectionId: string, intent: IntentEnvelope): RoomOutcome {
     const team = this.#requireTeam(connectionId);
     if (!team.ok) return this.#reject(team.error);
+
+    // §19 / D-033 — the inactive third team in a 3-team Round 4 matchup cannot
+    // play cards into it. Checked here, once, for every card play — rather than
+    // inside `GameEngine.playBacchanalCard`, which every round shares and which
+    // has no notion of "the third team" outside Round 4.
+    if (!this.#game.round4TeamMayPlayCards(team.value)) {
+      return this.#reject(
+        rejection('UNAUTHORIZED_ACTOR', 'Your team is not in the current Round 4 matchup.'),
+      );
+    }
 
     const cardInstanceId = readString(intent.payload, 'cardInstanceId');
     if (cardInstanceId === null) {
@@ -3027,6 +3247,788 @@ export class Room {
     return { ack: ok({ seq: event.seq }), broadcast: [event], direct: [], closeConnections: [] };
   }
 
+  // -------------------------------------------------------------------------
+  // Round 4 — Family Feud. Phase 7D-A2.
+  //
+  // GAME_RULES_LOCKED.md §19-§20, DECISION_LOG.md D-008 and D-033.
+  //
+  // Host-gated: beginning the round, starting a face-off, ruling any answer,
+  // recording a strike, opening a steal, and every progression step — matching
+  // Round 1 and Round 3's "the Host adjudicates" pattern (§14-§17, §11).
+  // PLAYER-gated (team resolved from the CONNECTION, never the payload):
+  // buzzing in, submitting a face-off/board/steal answer, PLAY/PASS and the
+  // steal wager — a phone acts for its own team and nothing else, exactly as
+  // `#submitRound1Answer` and `#submitRpsChoice` already do.
+  // -------------------------------------------------------------------------
+
+  /** Host begins Round 4: freezes the entering BB ranking and starts the FIRST matchup. */
+  #hostBeginRound4(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    // Optional Host-chosen strike ceiling for the WHOLE of Round 4, set once
+    // here at entry — defaults to 3 (§19) if omitted. `readNumber` returns
+    // null for a missing/non-numeric field, which `beginRound4` treats the
+    // same as "not provided."
+    const maxStrikes = readNumber(intent.payload, 'maxStrikes');
+    const outcome = this.#game.beginRound4(maxStrikes ?? undefined);
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * Host reveals the next survey and opens its face-off.
+   *
+   * THE SURVEY COMES FROM THE CONTENT SOURCE, never the Host's payload — §13's
+   * "the game supplies challenge content", the same discipline
+   * `#nextRound3Item` and `#nextRound1Question` already follow. The card window
+   * for this survey's question number (Q1-3 vs Q4-5, §6) is opened in the same
+   * step the question opens with, matching Round 1.
+   */
+  #hostStartRound4Faceoff(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const round = this.#game.round4;
+    if (round === null) {
+      return this.#reject(rejection('WRONG_STATE', 'Round 4 has not started.'));
+    }
+    const matchupTeamIds = round.matchupTeamIds;
+    if (matchupTeamIds.length !== 2) {
+      return this.#reject(rejection('WRONG_STATE', 'Round 4 has no active matchup.'));
+    }
+    const [teamA, teamB] = matchupTeamIds;
+    if (teamA === undefined || teamB === undefined) {
+      return this.#reject(rejection('WRONG_STATE', 'Round 4 has no active matchup.'));
+    }
+
+    const survey = this.#round4Content.nextSurvey();
+    if (survey === null) {
+      return this.#reject(
+        rejection('NOT_FOUND', 'The Round 4 content source has no more surveys.'),
+      );
+    }
+
+    // ONE HOST ACTION DRIVES THE PHASES, matching `#nextRound1Question` and
+    // `#nextRound3Item` — Round 4 plays several surveys per matchup, and making
+    // the Host walk ROUND_INTRO/RESULT -> CHALLENGE_INTRO by hand every survey
+    // would be one more chance to strand the game in the wrong phase mid-party.
+    const phase = this.#game.sessionView()?.phase ?? null;
+    if (phase === 'ROUND_INTRO' || phase === 'RESULT' || phase === 'MARKET') {
+      const moved = this.#game.advancePhase('CHALLENGE_INTRO');
+      if (!moved.ok) return this.#reject(moved.error);
+    }
+
+    const outcome = this.#game.startRound4Survey(survey, [teamA, teamB]);
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    const events: EventEnvelope[] = [
+      this.#log.append(
+        outcome.value.type,
+        { kind: 'host', sessionId: '' as never },
+        outcome.value.payload,
+        intent.intentId,
+      ),
+    ];
+
+    const cardChallengeKind: CardChallengeKind = isRound4DoubledQuestion(survey.questionNumber)
+      ? 'FAMILY_FEUD_Q4_Q5'
+      : 'FAMILY_FEUD_Q1_Q3';
+    const challengeId = this.#game.sessionView()?.challenge?.challengeId ?? null;
+    if (challengeId !== null) {
+      const opened = this.#game.shared.openCardWindow(challengeId, cardChallengeKind);
+      if (opened.ok) {
+        events.push(
+          this.#log.append(
+            'CARD_WINDOW_OPENED',
+            { kind: 'host', sessionId: '' as never },
+            { challengeId, challengeKind: cardChallengeKind, window: this.#game.shared.cards.windowView() },
+          ),
+        );
+      }
+    }
+
+    this.#touch();
+    const last = events[events.length - 1];
+    return {
+      ack: ok({ seq: last === undefined ? this.#log.latestSeq() : last.seq }),
+      broadcast: events,
+      direct: [],
+      closeConnections: [],
+    };
+  }
+
+  /**
+   * A face-off participant buzzes in. PLAYER intent.
+   *
+   * RACE SAFETY. Whichever buzz reaches `Room.handle` — and therefore this
+   * handler — first wins: `Room` processes one intent at a time (no concurrent
+   * mutation), and `Round4.buzz` refuses every buzz once `status` has already
+   * left `'reading'`. A duplicate or replayed buzz intent is caught twice over:
+   * the idempotency registry (`Room.handle`) short-circuits an exact retry
+   * before this handler runs at all, and a second DISTINCT buzz attempt from
+   * the same or the other team is refused by `Round4.buzz`'s own state check.
+   * Reconnecting never reopens a completed race — `Round4` tracks no per-
+   * connection state, only `status`, which a reconnect cannot rewind.
+   */
+  #submitRound4Buzz(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const team = this.#requireTeam(connectionId);
+    if (!team.ok) return this.#reject(team.error);
+
+    const outcome = this.#game.submitRound4Buzz(team.value);
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * A face-off answer. PLAYER intent — the buzzed-in team, or the opponent
+   * during its one-shot response, submits free text; the server matches it
+   * against the board and never exposes the board to do so.
+   */
+  #submitRound4FaceoffAnswer(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const team = this.#requireTeam(connectionId);
+    if (!team.ok) return this.#reject(team.error);
+
+    const answer = readString(intent.payload, 'answer');
+    if (answer === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing answer.'));
+    }
+
+    const matchedRank = this.#matchRound4FaceoffRank(answer);
+    const outcome = this.#game.ruleRound4FaceoffAnswer({ teamId: team.value, matchedRank });
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * Host overrides or confirms a face-off ruling directly.
+   *
+   * Accepts either `matchedRank` (a specific board rank, or absent/null for no
+   * valid match) so the Host can correct a mis-graded or ambiguous answer
+   * without retyping it — deterministic grading handles the common case, and
+   * the Host always has final say, exactly as Round 1's grading pipeline works.
+   */
+  #hostRuleRound4FaceoffAnswer(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const teamId = readString(intent.payload, 'teamId');
+    if (teamId === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing teamId.'));
+    }
+    const matchedRank = readNumber(intent.payload, 'matchedRank');
+
+    const outcome = this.#game.ruleRound4FaceoffAnswer({
+      teamId: asTeamId(teamId),
+      matchedRank,
+    });
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * Host starts the opponent's one-shot 3s clock.
+   *
+   * Live play: after the buzzer winner's answer misses #1, the Host decides
+   * when (or whether, in spirit) the opponent's chance actually starts —
+   * often the buzzer's answer was clearly weak enough that no realistic
+   * higher-ranked answer remains, and the Host wants a beat before putting
+   * the second team on the spot rather than an automatic countdown.
+   */
+  #hostStartRound4OpponentChanceTimer(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const outcome = this.#game.startRound4OpponentChanceTimer();
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * Resolve free text against the CURRENT face-off's board.
+   *
+   * Returns null (no valid match — a timeout, a wrong or off-board guess, or
+   * an ambiguous match the Host must break) rather than guessing, matching
+   * `matchRound4Answer`'s own refusal to pick between candidates.
+   */
+  #matchRound4FaceoffRank(submittedAnswer: string): number | null {
+    const round = this.#game.round4;
+    const current = round?.view().current ?? null;
+    const faceoffTeamId = current?.faceoff?.buzzedTeamId ?? current?.faceoff?.opponentTeamId ?? null;
+    if (round === null || round === undefined || current === null || faceoffTeamId === null) {
+      return null;
+    }
+    // The unrevealed board only — a face-off answer is judged the same way a
+    // board turn is: against what has not already been given away. Steups!
+    // cannot have fired yet at face-off time (it only removes an already-given
+    // BOARD PLAY answer), so which team's id is passed here never changes the
+    // candidate set in practice — it is passed anyway to satisfy the same
+    // per-team filter `revealBoardAnswer` will apply moments later.
+    const candidates = round.availableBoardAnswers(faceoffTeamId);
+    if (matchesTopAnswer(submittedAnswer, candidates)) {
+      const top = candidates.find((a) => a.rank === 1);
+      return top?.rank ?? null;
+    }
+    const matched = matchRound4Answer(submittedAnswer, candidates);
+    return matched.ambiguous ? null : (matched.answer?.rank ?? null);
+  }
+
+  /** The face-off winner chooses PLAY or PASS. PLAYER intent. */
+  #chooseRound4PlayOrPass(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const team = this.#requireTeam(connectionId);
+    if (!team.ok) return this.#reject(team.error);
+
+    const decision = readString(intent.payload, 'decision');
+    if (decision !== 'PLAY' && decision !== 'PASS') {
+      return this.#reject(rejection('INVALID_REQUEST', 'Decision must be PLAY or PASS.'));
+    }
+
+    const outcome = this.#game.chooseRound4PlayOrPass({
+      teamId: team.value,
+      decision: decision as Round4PlayDecision,
+    });
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    // The controlling team's player order is Host-supplied — the room has no
+    // opinion of its own about turn order within a team, matching Round 1's
+    // nomination model. An optional `playerOrder` on the SAME intent lets a
+    // Unity/Host panel set it in one step; it is a no-op if omitted.
+    const playerOrder = readStringArray(intent.payload, 'playerOrder');
+    if (playerOrder !== null && playerOrder.length > 0) {
+      this.#game.setRound4BoardPlayOrder(playerOrder);
+    }
+
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * Host starts the current board turn's 5s clock.
+   *
+   * Live play: answers are spoken aloud and matched by the Host, not typed
+   * and auto-graded, so nothing server-side can know when the Host finished
+   * posing the question — the Host starts the clock explicitly instead of it
+   * starting the instant PLAY/PASS is chosen or a previous turn ends.
+   */
+  #hostStartRound4BoardTurnTimer(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const outcome = this.#game.startRound4BoardTurnTimer();
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    return this.#publish(outcome.value, intent);
+  }
+
+  /** The active board player's answer. PLAYER intent. */
+  #submitRound4BoardAnswer(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const team = this.#requireTeam(connectionId);
+    if (!team.ok) return this.#reject(team.error);
+
+    const answer = readString(intent.payload, 'answer');
+    if (answer === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing answer.'));
+    }
+
+    const round = this.#game.round4;
+    if (round === null) {
+      return this.#reject(rejection('WRONG_STATE', 'Round 4 has not started.'));
+    }
+    const current = round.view().current;
+    if (current?.boardPlay === null || current?.boardPlay === undefined) {
+      return this.#reject(rejection('WRONG_STATE', 'Board play is not running.'));
+    }
+    if (current.boardPlay.controllingTeamId !== team.value) {
+      return this.#reject(
+        rejection('UNAUTHORIZED_ACTOR', 'Only the controlling team may answer.'),
+      );
+    }
+
+    const candidates = round.availableBoardAnswers(team.value);
+    const matched = matchRound4Answer(answer, candidates);
+
+    if (matched.ambiguous || matched.answer === null) {
+      // No confident deterministic match. The Host is told this via the
+      // strike/ruling flow rather than guessing: the room records nothing here
+      // and leaves the Host to call HOST_RULE_BOARD_ANSWER or
+      // HOST_RECORD_STRIKE, exactly as an ambiguous Round 1 answer waits on a
+      // ruling instead of self-resolving.
+      return this.#reject(
+        rejection('WRONG_STATE', 'No confident board match. Awaiting a Host ruling.', {
+          ambiguous: matched.ambiguous,
+        }),
+      );
+    }
+
+    const outcome = this.#game.revealRound4BoardAnswer(matched.answer.answerId);
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    const published = this.#publish(outcome.value, intent);
+    if (!published.ack.ok) return published;
+
+    if (this.#game.round4?.boardCleared() === true) {
+      return this.#appendRound4SurveyResolution(published, team.value);
+    }
+    return published;
+  }
+
+  /**
+   * Host rules a submitted board answer directly — confirms a match, corrects
+   * a mis-graded one, or names none (a wrong/off-board answer), in which case
+   * the Host follows up with HOST_RECORD_STRIKE. Mirrors Round 1's Host-ruling
+   * override for the same reason: deterministic grading handles most answers,
+   * the Host has final say on the rest.
+   */
+  #hostRuleRound4BoardAnswer(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const answerId = readString(intent.payload, 'answerId');
+    if (answerId === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing answerId.'));
+    }
+
+    const outcome = this.#game.revealRound4BoardAnswer(answerId);
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    const published = this.#publish(outcome.value, intent);
+    if (!published.ack.ok) return published;
+
+    if (this.#game.round4?.boardCleared() === true) {
+      const controllingTeamId = this.#game.round4?.view().current?.boardPlay?.controllingTeamId;
+      if (controllingTeamId !== undefined) {
+        return this.#appendRound4SurveyResolution(published, controllingTeamId);
+      }
+    }
+    return published;
+  }
+
+  /** Append the survey's own resolution event onto an already-published outcome. */
+  #appendRound4SurveyResolution(published: RoomOutcome, winningTeamId: TeamId): RoomOutcome {
+    const resolved = this.#game.resolveRound4BoardCleared(winningTeamId);
+    if (!resolved.ok) return published;
+
+    const event = this.#log.append(
+      resolved.value.change.type,
+      { kind: 'server' },
+      resolved.value.change.payload,
+    );
+    for (const entry of resolved.value.ledgerEntries) {
+      this.#game.attachLedgerSeq(entry.entryId, event.seq);
+    }
+
+    return {
+      ...published,
+      ack: ok({ seq: event.seq }),
+      broadcast: [...published.broadcast, event],
+    };
+  }
+
+  /**
+   * Host records one strike directly — a timeout, or a wrong/duplicate/
+   * off-board Host call with no matcher run. `reason` must be one of the
+   * locked reasons (§19); FORGIVE MEH! is checked FIRST so a retry is granted
+   * before any strike is committed, never after.
+   */
+  #hostRecordRound4Strike(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const reason = readString(intent.payload, 'reason');
+    if (reason === null || !(ROUND4_STRIKE_REASONS as readonly string[]).includes(reason)) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing or unknown strike reason.'));
+    }
+
+    const round = this.#game.round4;
+    const controllingTeamId = round?.view().current?.boardPlay?.controllingTeamId ?? null;
+
+    // §19/D-033 — FORGIVE MEH! "gives that player one final retry, BEFORE the
+    // strike is applied... a wrong retry means one strike, never two for the
+    // same turn." So a team that was just granted the shared retry (its card's
+    // Clash already resolved) is never struck here on this call — the Host
+    // grants the retry attempt instead by NOT recording a strike, waits for the
+    // retry's own answer, and calls this again only if THAT also fails. The
+    // shared retry budget (`useForgiveMehRetry`) is one-per-challenge, so a
+    // second failure here has nothing left to consume and strikes normally.
+    if (
+      controllingTeamId !== null &&
+      this.#game.round4HasForgiveMehRetry(controllingTeamId) &&
+      readBoolean(intent.payload, 'afterRetry') !== true
+    ) {
+      return this.#reject(
+        rejection('WRONG_STATE', 'FORGIVE MEH! owes this team a retry before a strike applies.', {
+          teamId: controllingTeamId,
+        }),
+      );
+    }
+
+    const outcome = this.#game.recordRound4Strike(reason as Round4StrikeReason);
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    const published = this.#publish(outcome.value, intent);
+    if (!published.ack.ok) return published;
+
+    const stealTriggered = (
+      outcome.value.payload as { readonly stealTriggered?: boolean }
+    ).stealTriggered;
+    if (stealTriggered !== true) return published;
+
+    const started = this.#game.startRound4Steal();
+    if (!started.ok) return published;
+
+    const event = this.#log.append(
+      started.value.type,
+      { kind: 'server' },
+      started.value.payload,
+    );
+    return { ...published, broadcast: [...published.broadcast, event] };
+  }
+
+  /**
+   * Host directly sets the current turn's strike count — live jurisdiction,
+   * at any time (correcting a mistaken ruling, or reversing a prior Host
+   * decision). If the new count crosses the steal ceiling and the steal has
+   * not already been opened, this opens it exactly as a normal strike would
+   * — same as `#hostRecordRound4Strike`'s own trailing steal-open step.
+   */
+  #hostSetRound4Strikes(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const count = readNumber(intent.payload, 'count');
+    if (count === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing count.'));
+    }
+
+    const outcome = this.#game.setRound4Strikes(count);
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    const published = this.#publish(outcome.value, intent);
+    if (!published.ack.ok) return published;
+
+    const stealTriggered = (
+      outcome.value.payload as { readonly stealTriggered?: boolean }
+    ).stealTriggered;
+    if (stealTriggered !== true) return published;
+
+    const started = this.#game.startRound4Steal();
+    if (!started.ok) return published;
+
+    const event = this.#log.append(
+      started.value.type,
+      { kind: 'server' },
+      started.value.payload,
+    );
+    return { ...published, broadcast: [...published.broadcast, event] };
+  }
+
+  /**
+   * Host cancels the running board turn timer WITHOUT recording a strike —
+   * live play: someone answered before the 5s window ran out.
+   */
+  #hostCancelRound4BoardTurnTimer(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const outcome = this.#game.cancelRound4BoardTurnTimer();
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * Host starts the steal's 30s confer/answer clock.
+   *
+   * Live play: the Host announces the steal opportunity to the stealing team
+   * aloud, THEN starts this clock — the steal opening (on the third strike)
+   * no longer starts it automatically.
+   */
+  #hostStartRound4StealTimer(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const outcome = this.#game.startRound4StealTimer();
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * The stealing team locks its wager. PLAYER intent.
+   *
+   * THE CAP IS ENFORCED BY THE EXISTING GENERIC WAGER (`Deals.proposeWager`,
+   * via `GameEngine.lockRound4StealWager`) — up to 50% of the stealing team's
+   * CURRENT BB, §19. No amount is trusted beyond what that primitive allows.
+   */
+  #submitRound4StealWager(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const team = this.#requireTeam(connectionId);
+    if (!team.ok) return this.#reject(team.error);
+
+    const amount = readNumber(intent.payload, 'amount');
+    if (amount === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing amount.'));
+    }
+
+    const round = this.#game.round4;
+    const steal = round?.view().current?.steal;
+    if (steal === null || steal === undefined) {
+      return this.#reject(rejection('WRONG_STATE', 'No steal is open.'));
+    }
+    if (steal.stealingTeamId !== team.value) {
+      return this.#reject(
+        rejection('UNAUTHORIZED_ACTOR', 'Only the stealing team may lock a wager.'),
+      );
+    }
+
+    const outcome = this.#game.lockRound4StealWager({ teamId: team.value, amount });
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /** The stealing team's one final answer. PLAYER intent. */
+  #submitRound4StealAnswer(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const team = this.#requireTeam(connectionId);
+    if (!team.ok) return this.#reject(team.error);
+
+    const answer = readString(intent.payload, 'answer');
+    if (answer === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing answer.'));
+    }
+
+    const round = this.#game.round4;
+    const steal = round?.view().current?.steal;
+    if (steal === null || steal === undefined) {
+      return this.#reject(rejection('WRONG_STATE', 'No steal is open.'));
+    }
+    if (steal.stealingTeamId !== team.value) {
+      return this.#reject(rejection('UNAUTHORIZED_ACTOR', 'Only the stealing team may answer.'));
+    }
+
+    const candidates = round?.availableBoardAnswers(steal.defendingTeamId) ?? [];
+    const matched = matchRound4Answer(answer, candidates);
+    const correct = !matched.ambiguous && matched.answer !== null;
+
+    return this.#resolveRound4Steal(correct, intent);
+  }
+
+  /** Host rules the steal answer directly and settles it — the Host's final say. */
+  #hostRuleRound4StealAnswer(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const correct = readBoolean(intent.payload, 'correct');
+    if (correct === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing correct.'));
+    }
+
+    // §19: the steal wager is locked BEFORE the stealing team answers. A Host
+    // ruling issued before a wager exists — most likely a race between the
+    // Host watching their own countdown and the team still typing a wager on
+    // their phone — must not resolve the steal out from under them, since the
+    // resolved steal would then permanently close the wager input with none
+    // ever recorded. The ONE exception is a genuinely expired confer window:
+    // if the 30 seconds ran out with no wager locked, real Family Feud still
+    // lets the round conclude — the team simply has nothing of their own
+    // staked, so a correct answer wins only the accumulated board points, per
+    // the wager's own "0 or more" allowance.
+    const steal = this.#game.round4?.view().current?.steal ?? null;
+    if (
+      steal !== null &&
+      steal.wagerId === null &&
+      !this.#game.round4StealConferExpired()
+    ) {
+      return this.#reject(
+        rejection(
+          'WRONG_STATE',
+          'The stealing team has not locked a wager yet. Wait for their wager, or for the 30-second window to run out.',
+        ),
+      );
+    }
+
+    return this.#resolveRound4Steal(correct, intent);
+  }
+
+  /** Settle the steal: the wager, then the survey's pot, exactly once. */
+  #resolveRound4Steal(correct: boolean, intent: IntentEnvelope): RoomOutcome {
+    const outcome = this.#game.resolveRound4Steal(correct);
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    this.#touch();
+    const event = this.#log.append(
+      outcome.value.change.type,
+      { kind: 'host', sessionId: '' as never },
+      outcome.value.change.payload,
+      intent.intentId,
+    );
+    for (const entry of outcome.value.ledgerEntries) {
+      this.#game.attachLedgerSeq(entry.entryId, event.seq);
+    }
+
+    return { ack: ok({ seq: event.seq }), broadcast: [event], direct: [], closeConnections: [] };
+  }
+
+  /**
+   * DEVELOPMENT ONLY — enter Round 4 without playing Rounds 1-3.
+   *
+   * Same gate and discipline as `#devStartRound3`: real transitions, and the
+   * SAME `beginRound4` a real Round 3 completion will eventually call.
+   */
+  #devStartRound4(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    if (!this.#game.devTools) {
+      return this.#reject(
+        rejection('ILLEGAL_ACTION', 'Development controls are disabled on this server.'),
+      );
+    }
+
+    const maxStrikes = readNumber(intent.payload, 'maxStrikes');
+    const outcome = this.#game.devEnterRound4(maxStrikes ?? undefined);
+    if (!outcome.ok) return this.#reject(outcome.error);
+
+    this.#touch();
+    const events = outcome.value.map((change) =>
+      this.#log.append(
+        change.type,
+        { kind: 'host', sessionId: '' as never },
+        change.payload,
+        change === outcome.value[0] ? intent.intentId : undefined,
+      ),
+    );
+
+    const last = events[events.length - 1];
+    return {
+      ack: ok({ seq: last === undefined ? this.#log.latestSeq() : last.seq }),
+      broadcast: events,
+      direct: [],
+      closeConnections: [],
+    };
+  }
+
+  /**
+   * Host begins Sudden Death between exactly two named teams.
+   *
+   * GAME_RULES_LOCKED.md §21 / D-034 — the project owner wants this control
+   * at ANY point, not only a genuine BB tie at ROUND_COMPLETE: `teamIds` is
+   * Host-supplied, never derived from a tie check here. `GameEngine.
+   * beginSuddenDeath` handles the phase transition itself and refuses if
+   * Sudden Death has already started or a named team does not exist.
+   */
+  #hostBeginSuddenDeath(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const teamIds = readStringArray(intent.payload, 'teamIds');
+    if (teamIds === null || teamIds.length !== 2) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Sudden Death needs exactly two teamIds.'));
+    }
+    const [a, b] = teamIds;
+    /* c8 ignore next 3 -- unreachable: length check above guarantees both are defined. */
+    if (a === undefined || b === undefined) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Sudden Death needs exactly two teamIds.'));
+    }
+
+    const outcome = this.#game.beginSuddenDeath([asTeamId(a), asTeamId(b)]);
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /** Host reveals the next face-off's question and opens the buzzer. */
+  #hostStartSuddenDeathFaceoff(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const question = this.#suddenDeathContent.nextQuestion();
+    if (question === null) {
+      return this.#reject(
+        rejection('NOT_FOUND', 'The Sudden Death content source has no more questions.'),
+      );
+    }
+
+    const outcome = this.#game.startSuddenDeathFaceoff(question);
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /** A face-off participant buzzes in. PLAYER intent. */
+  #submitSuddenDeathBuzz(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const team = this.#requireTeam(connectionId);
+    if (!team.ok) return this.#reject(team.error);
+
+    const outcome = this.#game.submitSuddenDeathBuzz(team.value);
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * The buzzed-in team's answer. PLAYER intent — matched deterministically
+   * against the question's #1 board answer only (§21 / D-034 — anything else
+   * loses the face-off outright, so there is no "which rank" ambiguity to
+   * resolve the way a normal Round 4 face-off has).
+   */
+  #submitSuddenDeathAnswer(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const team = this.#requireTeam(connectionId);
+    if (!team.ok) return this.#reject(team.error);
+
+    const answer = readString(intent.payload, 'answer');
+    if (answer === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing answer.'));
+    }
+
+    const suddenDeath = this.#game.suddenDeath;
+    const question = suddenDeath?.view().current;
+    if (suddenDeath === null || suddenDeath === undefined || question === null || question === undefined) {
+      return this.#reject(rejection('WRONG_STATE', 'No Sudden Death face-off is running.'));
+    }
+
+    // The current question's board is never exposed to a player — grading
+    // happens against the server's own copy, matching Round 4's own
+    // `#matchRound4FaceoffRank` / `Round4.availableBoardAnswers`.
+    const correct = matchesTopAnswer(answer, suddenDeath.currentQuestionAnswers);
+
+    const outcome = this.#game.ruleSuddenDeathAnswer({ teamId: team.value, correct });
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * Host rules the buzzed team's answer directly — confirms or corrects the
+   * deterministic grade, or rules a timeout (`correct: false`), exactly like
+   * Round 4's own Host-ruling override.
+   */
+  #hostRuleSuddenDeathAnswer(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const teamId = readString(intent.payload, 'teamId');
+    if (teamId === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing teamId.'));
+    }
+    const correct = readBoolean(intent.payload, 'correct');
+    if (correct === null) {
+      return this.#reject(rejection('INVALID_REQUEST', 'Missing correct.'));
+    }
+
+    const outcome = this.#game.ruleSuddenDeathAnswer({ teamId: asTeamId(teamId), correct });
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
+  /**
+   * Host records that neither side answered validly in the current
+   * face-off. §21 / D-034 — no penalty to either streak; the Host reveals a
+   * fresh face-off next via HOST_START_SUDDEN_DEATH_FACEOFF.
+   */
+  #hostRecordSuddenDeathNoDecision(connectionId: string, intent: IntentEnvelope): RoomOutcome {
+    const auth = this.#requireHost(connectionId);
+    if (!auth.ok) return this.#reject(auth.error);
+
+    const outcome = this.#game.recordSuddenDeathNoDecision();
+    if (!outcome.ok) return this.#reject(outcome.error);
+    return this.#publish(outcome.value, intent);
+  }
+
   /**
    * Validate the content and enter Round 1.
    *
@@ -3207,6 +4209,10 @@ const ROUND1_CHALLENGE_TYPE = 'ROUND1_TRIVIA';
 function readBoolean(payload: unknown, field: string): boolean | null {
   const value = readField(payload, field);
   return typeof value === 'boolean' ? value : null;
+}
+function readNumber(payload: unknown, field: string): number | null {
+  const value = readField(payload, field);
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 function readStringArray(payload: unknown, field: string): string[] | null {
   const value = readField(payload, field);

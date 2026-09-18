@@ -54,3 +54,5 @@ export * from './transport.js';
 export * from './benchmark.js';
 export * from './health.js';
 export * from './round1.js';
+export * from './round4.js';
+export * from './sudden-death.js';

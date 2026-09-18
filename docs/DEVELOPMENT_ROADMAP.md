@@ -246,18 +246,57 @@ rule defines one); BB for winning the round; a production content pipeline (the
 seam exists, TEST content fills it); any audio, music or logo recognition.
 
 ### Round 4
-Implement:
-- Family Feud,
-- digital buzzer,
-- strikes/control/steal,
-- three-team progression,
-- Q4/Q5 doubled,
-- wager.
 
-Wait for open Steups/FORGIvE MEH interactions before finalizing those pieces.
+**Rules are locked** (D-033, `GAME_RULES_LOCKED.md` §19-§20). **Implemented**
+(Phase 7D-A / 7D-A2 / 7D-B / 7D-B1) — engine, production server/room wiring,
+Unity Host panel and player web client:
+- Family Feud face-off (buzzer opens while the Host reads; 3-second answer;
+  #1-answer-wins-outright or opponent gets one higher-ranked shot),
+- normal board play (turn order, no conferring, 5-second timer, strikes),
+- steal (30 seconds, existing custom wager up to 50% of current BB),
+- three-team progression (D-008, unchanged) — the FIRST matchup (entering-2nd
+  vs entering-3rd) is seated and displayed correctly; **the FIRST → FINAL
+  matchup advance has no Host control yet** (`Round4.decideFirstMatchup` /
+  `beginRound4FinalMatchup` exist and are tested, but nothing calls them from
+  a room intent),
+- Q4/Q5 doubled,
+- Steups!, FORGIVE MEH! and inactive-third-team card behavior, now locked and
+  wired (not yet exercised live by the project owner),
+- live-play Host controls added in 7D-B1: Host-started (not automatic)
+  board-turn/steal/opponent-chance timers, a Host-cancellable board timer, a
+  Host-chosen strike ceiling, free Host jurisdiction over strikes at any
+  time, and the Host's own snapshot showing the full board (never leaked to
+  players or into any broadcast event) so the Host can run the round live
+  against spoken answers.
+
+`OPEN_RULES.md` §8, §9 and §10 are resolved; nothing here is still waiting on
+them. See `CLAUDE.md`'s "Phase 7D-A / 7D-A2 / 7D-B / 7D-B1 / 7D-B2 leave these
+deliberately undecided" for the current gap list.
 
 ### Sudden Death
-Implement locked streak/immediate-loss rules.
+
+**Implemented** (Phase 7D-B2) — engine, room wiring, Unity Host panel and
+player web client. **D-034 replaced** the format this section originally
+pointed at (individual questions, first to two consecutive correct answers)
+with a face-off sequence, decided during live playtesting — read D-034 before
+touching this again:
+- a face-off sequence (same mechanic as §19's own face-off — buzzer opens
+  while the Host reads, first valid buzz locks out the other side, a timed
+  answer window),
+- the #1 board answer wins a face-off outright; anything else (wrong, or a
+  buzz-then-timeout) loses that face-off IMMEDIATELY — no opponent's-chance
+  fallback,
+- neither side answering validly decides nothing; the Host reveals a fresh
+  face-off,
+- first team to win two face-offs **in a row** (a loss resets the streak)
+  wins Sudden Death and the game,
+- no Market, Maco Mail, Bacchanal Cards, advantages, wagers or multipliers
+  (§21, unchanged by D-034),
+- the Host can trigger Sudden Death at **any point**, naming any two teams —
+  not gated behind a genuine BB tie, per the project owner's explicit request.
+
+Not locked: the exact answer-window duration (configuration-driven, defaulted
+to Round 4's own 3 seconds — `OPEN_RULES.md` §11).
 
 ## Phase 8 — Unity Presentation / Tutorials
 

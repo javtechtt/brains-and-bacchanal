@@ -12,6 +12,8 @@ import type { LobbyPlayer, LobbyRoom, TeamMode } from './room.js';
 import type { Round2StateView } from './round2.js';
 import type { Round1StateView } from './round1.js';
 import type { Round3StateView } from './round3.js';
+import type { Round4StateView } from './round4.js';
+import type { SuddenDeathStateView } from './sudden-death.js';
 import type { HostSharedSystemsView, PlayerSharedSystemsView } from './shared-systems.js';
 
 /**
@@ -433,6 +435,24 @@ export interface GameSessionView {
    * nominee role and any Maco! viewing all depend on that.
    */
   readonly round1: Round1StateView | null;
+  /**
+   * Round 4 progression — Family Feud. Phase 7D-A2. Null in every other round.
+   *
+   * Its own field for the same reason as `round2`, `round3` and `round1`.
+   * Unlike `round1`, this is NOT re-scoped per viewer by the room: Round4's own
+   * view type already hides everything that needs hiding (unrevealed board
+   * text/values via `Round4BoardAnswerView`, future surveys by never existing
+   * yet) regardless of who is asking, so the Host and every player see the same
+   * shape here — matching `round2`'s reasoning, not `round1`'s.
+   */
+  readonly round4: Round4StateView | null;
+  /**
+   * Sudden Death — Phase 7D-B2, GAME_RULES_LOCKED.md §21 / D-034. Null
+   * outside Sudden Death. Unscoped for the same reason as `round4`: the
+   * face-off view already hides the board except the one revealed
+   * decision, regardless of viewer.
+   */
+  readonly suddenDeath: SuddenDeathStateView | null;
 }
 
 /** Why the game is paused and where it returns to. */

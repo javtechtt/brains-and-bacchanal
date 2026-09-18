@@ -54,3 +54,8 @@ export * from './game-engine.js';
 export * from './round1.js';
 export * from './round1-content.js';
 export * from './round1-grading.js';
+export * from './round4.js';
+export * from './round4-content.js';
+export * from './round4-grading.js';
+export * from './sudden-death.js';
+export * from './sudden-death-content.js';

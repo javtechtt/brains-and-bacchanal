@@ -216,8 +216,10 @@ After each major task, report:
 
 ## Current Phase
 
-**Phases 1–6 are complete. Phase 7A (Round 2), Phase 7B (Round 3) and
-Phase 7C (Round 1) are complete.**
+**Phases 1–6 are complete. Phase 7A (Round 2), Phase 7B (Round 3), Phase 7C
+(Round 1), Phase 7D-A/7D-A2 (Round 4 engine + server wiring), Phase 7D-B
+(Round 4 Unity Host + player clients) and Phase 7D-B1/7D-B2 (live-play Host
+controls + Sudden Death) are complete.**
 
 - Phase 1 — Project Foundation
 - Phase 2 — Protocol + Generic Game State
@@ -228,8 +230,18 @@ Phase 7C (Round 1) are complete.**
 - Phase 7A — Round 2, "Shake Up Yuhself!" (`docs/ROUND_2.md`)
 - Phase 7B — Round 3 (`docs/ROUND_3.md`)
 - Phase 7C — Round 1, "Nah, That Too Easy!" (`docs/ROUND_1.md`)
+- Phase 7D-A / 7D-A2 — Round 4, "Family Feud" engine, content seam and
+  production server/room wiring (`GAME_RULES_LOCKED.md` §19-§20, D-008, D-033)
+- Phase 7D-B — Round 4 Unity Host panel and player web clients
+- Phase 7D-B1 — Live-play Host controls: Host-started board/steal/opponent-
+  chance timers, Host-visible board for live spoken answers, a Host-chosen
+  strike ceiling, and free Host jurisdiction over strikes mid-game
+- Phase 7D-B2 — Sudden Death (`GAME_RULES_LOCKED.md` §21, **replaced** by
+  D-034 during live playtesting — see that decision before touching §21)
 
-Next is **Phase 7D** from `docs/DEVELOPMENT_ROADMAP.md`.
+Next is **Phase 7D-C** (Round 1 → Round 2 → Round 3 → Round 4 → Sudden Death
+progression wiring, and the still-open 3-team FIRST→FINAL matchup advance
+control — see below) from `docs/DEVELOPMENT_ROADMAP.md`.
 **Do not begin it without the project owner asking.**
 
 Do not jump ahead to full gameplay.
@@ -237,6 +249,45 @@ Do not jump ahead to full gameplay.
 Do not build production content.
 
 Do not finalize any rule listed in `docs/OPEN_RULES.md`.
+
+### Phase 7D-A / 7D-A2 / 7D-B / 7D-B1 / 7D-B2 leave these deliberately undecided
+
+Round 4 ("Family Feud") and Sudden Death are implemented and playable through
+the production server, Unity Host and player web clients — engine, room
+wiring, content seam, and functional (not Phase 8-polished) UI on both ends.
+
+**Genuinely unresolved, and not to be invented:**
+
+- **The 3-team FIRST → FINAL matchup advance.** `Round4.decideFirstMatchup`
+  and `Round4.beginRound4FinalMatchup` exist and are tested at the engine
+  layer, but **no room intent, Host button, or player control calls them**.
+  A 3-team game correctly seats and displays the FIRST matchup (entering-2nd
+  vs entering-3rd, entering-1st shown "sitting out"), but nothing currently
+  lets the Host actually decide that matchup and advance to the FINAL one.
+  This is the next piece of wiring, not a rule question.
+- **Bacchanal cards in Round 4 and Sudden Death remain untested end-to-end**
+  by the project owner. The server-side card eligibility
+  (`CARD_ELIGIBILITY.FAMILY_FEUD_Q1_Q3` / `FAMILY_FEUD_Q4_Q5` /
+  `SUDDEN_DEATH: []`) and Steups!/Forgive Meh! integration are implemented
+  and covered by automated tests, but have not been exercised live.
+- **A production content pipeline.** The `Round4ContentSource` and
+  `SuddenDeathContentSource` seams exist and TEST content fills them; the
+  Host never types survey or Sudden Death question content.
+- **Round 1 → 2 → 3 → 4 → Sudden Death progression is not wired end to end.**
+  Round 4 and Sudden Death are each reachable only through their own
+  development-gated entry point (`DEV_START_ROUND4`,
+  `HOST_BEGIN_SUDDEN_DEATH`); completing an earlier round does not yet
+  automatically advance into the next.
+- **Sudden Death's own answer-window duration** is configuration-driven
+  (defaulted to 3 seconds, reusing Round 4's own locked face-off window) but
+  not independently locked — see `OPEN_RULES.md` §11 and D-034.
+
+**Standing note — D-034 replaced a locked rule.** `GAME_RULES_LOCKED.md` §21
+originally locked an individual-question, first-to-two-consecutive-correct-
+answers format for Sudden Death. The project owner replaced it with a
+face-off sequence (same mechanic as §19) during live playtesting. This is
+recorded as a genuine rule REPLACEMENT in `DECISION_LOG.md` D-034, not a
+silent edit — read it before touching Sudden Death's rules again.
 
 ### Phase 5 leaves these deliberately undecided
 

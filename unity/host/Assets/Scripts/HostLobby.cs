@@ -98,6 +98,16 @@ namespace BrainsAndBacchanal
 
 
         private Vector2 _playerScroll;
+        /// <summary>
+        /// The Room/Players/Engine/Shared/Round panels are laid out in one
+        /// long horizontal row (see OnGUI). IMGUI does not wrap or scroll a
+        /// group on its own, so as more round panels were added the later
+        /// ones (Round 1, Round 4) ran off the right edge of the window with
+        /// no way to reach them. Wrapping that row in a horizontal
+        /// ScrollView, keyed on this field, is the smallest fix that keeps
+        /// every panel reachable without redesigning the layout.
+        /// </summary>
+        private Vector2 _panelRowScroll;
         private bool _busy;
 
         /// <summary>
@@ -705,6 +715,16 @@ namespace BrainsAndBacchanal
             }
             else
             {
+                // See `_panelRowScroll`'s own doc comment: this row keeps
+                // growing as rounds are added, and IMGUI never wraps or
+                // scrolls a BeginHorizontal group on its own — without this,
+                // later panels (Round 1, Round 4) run off the right edge with
+                // no way to reach them. `alwaysShowHorizontal: true` keeps the
+                // scrollbar visible so it is obvious more panels exist off-screen.
+                _panelRowScroll = GUILayout.BeginScrollView(
+                    _panelRowScroll,
+                    alwaysShowHorizontal: true,
+                    alwaysShowVertical: false);
                 GUILayout.BeginHorizontal();
                 DrawRoomPanel(snapshot, game);
                 GUILayout.Space(24);
@@ -727,7 +747,14 @@ namespace BrainsAndBacchanal
                 GUILayout.Space(24);
                 // Phase 7C — Round 1, the first round actually played.
                 DrawRound1Panel(snapshot, game);
+                GUILayout.Space(24);
+                // Phase 7D-B — Round 4, Family Feud.
+                DrawRound4Panel(snapshot, game);
+                GUILayout.Space(24);
+                // Phase 7D-B2 — Sudden Death. §21 / D-034.
+                DrawSuddenDeathPanel(snapshot, game);
                 GUILayout.EndHorizontal();
+                GUILayout.EndScrollView();
             }
 
             GUILayout.EndArea();

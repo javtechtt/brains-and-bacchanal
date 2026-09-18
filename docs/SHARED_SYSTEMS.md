@@ -256,9 +256,10 @@ team's pool, the defenders must give another, and they cannot reuse it. The
 Steups team **may** later use that answer — and is **not required to**. It does
 not mean "you must use their answer next turn."
 
-🔓 The Family Feud board specifics (`OPEN_RULES.md` §8) are **not** implemented:
-whether the answer stays unrevealed, whether its BB stays off the board, what
-happens if it was already revealed.
+The Family Feud board specifics are locked (D-033, `GAME_RULES_LOCKED.md`
+§19) and **implemented** (Phase 7D-A): a Steups'd answer does not score for
+the defending team and cannot be reused by them that survey; the
+Steups-playing team may use it later if a legal opportunity arises.
 
 ---
 

@@ -101,35 +101,44 @@ failure is the signal to update the test, not a regression.
 
 Nothing is implemented yet; Round 1 is not built.
 
-## 8. Family Feud — Steups Board Behavior
+## 8. Family Feud — Steups Board Behavior — ✅ RESOLVED
 
-Steups is approved for Family Feud, but exact board behavior is not fully defined.
+**Resolved by the project owner.** Steups! removes an opponent's valid board
+answer: it does not score for the defending team, and that team cannot reuse it
+during the survey. The team that played Steups! may later use the removed
+answer if they gain a legal opportunity to give it.
 
-Need to decide:
-- does the Steups'd valid answer remain unrevealed?
-- does its BB stay off the board?
-- can the Steups team later use that answer?
-- what if the answer was already visually revealed?
+See `GAME_RULES_LOCKED.md` §19 and `DECISION_LOG.md` D-033.
 
-## 9. Family Feud — FORGIVE MEH! and Strikes
+## 9. Family Feud — FORGIVE MEH! and Strikes — ✅ RESOLVED
 
-Need to decide whether the first wrong answer:
-- waits until the retry is complete before a strike is applied,
-- or creates a strike immediately and the retry happens afterward.
+**Resolved by the project owner: the retry happens before the strike.** A wrong
+board-play answer gives that player one final retry before any strike is
+applied. Correct retry → no strike. Wrong retry → one strike, never two for the
+same turn.
 
-## 10. Three-Team Family Feud — Inactive Team Card Use
+See `GAME_RULES_LOCKED.md` §19 and `DECISION_LOG.md` D-033.
 
-Need to confirm:
-- only the two teams currently playing a Family Feud question may use cards,
-- inactive/sitting-out teams cannot use cards.
+## 10. Three-Team Family Feud — Inactive Team Card Use — ✅ RESOLVED
 
-Do not assume until confirmed.
+**Resolved by the project owner: confirmed.** Only the two teams currently
+playing a Family Feud matchup may play Bacchanal cards into it. The inactive
+third team's cards remain untouched and become playable again once it becomes
+an active participant.
 
-## 11. Round 4 / Sudden Death Timers
+See `GAME_RULES_LOCKED.md` §19 and `DECISION_LOG.md` D-033.
 
-Exact default timers are not yet locked.
+## 11. Sudden Death Timers
 
-Keep timers configuration-driven.
+Round 4's own timers are now locked (`GAME_RULES_LOCKED.md` §19, D-033):
+face-off buzz-in has no separate countdown, the face-off answer window is 3
+seconds, a normal board turn is 5 seconds, and a steal is 30 seconds.
+
+**Still open:** the exact default timers for §21's end-of-game Sudden Death mode
+are not yet locked. Keep them configuration-driven.
+
+D-034 locked the FORMAT (a face-off sequence, first to two wins in a row) —
+only the answer-window DURATION for a Sudden Death face-off remains open here.
 
 ## 12. Partner, I Sorry — Insufficient BB
 

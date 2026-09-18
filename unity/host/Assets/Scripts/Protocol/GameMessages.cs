@@ -205,6 +205,12 @@ namespace BrainsAndBacchanal.Protocol
         /// <summary>Round 1 progression. Phase 7C. Null in every other round.</summary>
         public Round1StateView round1;
 
+        /// <summary>Round 4 progression — Family Feud. Phase 7D-B. Null in every other round.</summary>
+        public Round4StateView round4;
+
+        /// <summary>Sudden Death progression. Phase 7D-B2. Null outside Sudden Death.</summary>
+        public SuddenDeathStateView suddenDeath;
+
         /// <summary>Whether Round 2 is the round being played right now.</summary>
         public bool InRound2 => round2 != null && round2.Exists;
 
@@ -213,6 +219,12 @@ namespace BrainsAndBacchanal.Protocol
 
         /// <summary>Whether Round 1 is the round being played right now.</summary>
         public bool InRound1 => round1 != null && round1.Exists;
+
+        /// <summary>Whether Round 4 is the round being played right now.</summary>
+        public bool InRound4 => round4 != null && round4.Exists;
+
+        /// <summary>Whether Sudden Death is running right now.</summary>
+        public bool InSuddenDeath => suddenDeath != null && suddenDeath.Exists;
     }
 
     /// <summary>One entry in the BB history. Host-only.</summary>

@@ -65,6 +65,9 @@ Round 1 no longer has.
 - tie after first two → entering 2nd advances,
 - no new final wager.
 
+Unchanged and preserved by D-033, which layers the face-off, board-play, steal
+and card rules on top of the matchups this describes.
+
 ## D-009 — Host Deal Frequency
 Maximum one Host Deal per round.
 
@@ -514,3 +517,114 @@ anywhere**, exactly as Maco! had none before. That is a real consequence of Roun
 1 dropping individually assigned questions, not an oversight. Family Feud and
 Round 4 may yet give them one; until then they are dealt and held, unplayable,
 and `CARDS_WITHOUT_LEGAL_CHALLENGE` names them.
+
+## D-033 — Round 4 / Family Feud Core Rules Resolved
+The project owner resolved Family Feud's face-off, board play, steal timing and
+card interactions, closing `OPEN_RULES.md` §8, §9 and §10, and narrowing §11 to
+just the end-of-game Sudden Death timers.
+
+**This is documentation only. Nothing is implemented.** Round 4 remains unbuilt.
+
+### Family Feud follows authentic mechanics, with Brains & Bacchanal layered on top
+
+Existing Brains & Bacchanal structure is explicitly **preserved, not replaced**:
+the 3-team matchup structure (§20 / D-008), BB as score, the custom steal wager,
+question allocation, the Q4/Q5 doubling, and the card system.
+
+### Face-off
+
+The buzzer opens **while the Host is reading** the question — there is no
+separate "time to buzz" countdown. First valid buzz locks out the opponent and
+stops the reading. The buzzer winner has **3 seconds** to answer.
+
+- that answer is the #1 board answer → immediate face-off win,
+- otherwise → the opponent gets **one** shot at a higher-ranked answer, and
+  whichever valid answer ranks higher wins the face-off.
+
+The winner chooses PLAY or PASS, as already locked.
+
+### Normal board play
+
+Turn order, one answer per turn, **no conferring**. Each turn: **5 seconds**.
+A wrong, duplicate, off-board, or un-timed answer is **one strike**. Three
+strikes hands the opposing team a steal.
+
+### Steal — the custom wager is kept, not replaced
+
+**30 seconds** to confer and give one final answer. The existing steal wager
+(up to 50% of current BB, `GAME_RULES_LOCKED.md` §19) is unchanged: correct
+steal wins the board points and the wager per the existing mechanic; wrong steal
+loses the wager and hands the board points to the original team. BB floors at
+0, as everywhere else.
+
+### Cards
+
+**Steups!** removes a valid opposing board answer: it does not score, and the
+defending team cannot reuse it that survey. The Steups! team may use the
+removed answer later if a legal opportunity arises. Normal one-card-per-
+challenge and Clash rules (§2, §5) are unchanged.
+
+**FORGIVE MEH!** retries a wrong board answer **before** any strike is applied.
+Correct retry → no strike. Wrong retry → exactly one strike — never two for the
+same turn. Shared retry restrictions (§4) still apply.
+
+**The inactive third team in a 3-team matchup cannot play cards into it.** Its
+hand is untouched and becomes playable again once it is an active participant.
+This confirms what `OPEN_RULES.md` §10 had left unconfirmed.
+
+### Multipliers
+
+Q4 and Q5 stay doubled, as already locked. No other multiplier is introduced.
+
+### Still open, and not invented here
+
+`OPEN_RULES.md` §11, narrowed: the end-of-game Sudden Death mode's (§21) own
+timers are still not locked. Round 4's *own* timers (face-off, board, steal) are
+now locked by this decision and are no longer part of that open item.
+
+No other Round 4 rule was identified as unresolved by this pass.
+
+## D-034 — Sudden Death Format Replaced: Face-Offs, Not Individual Questions
+
+The project owner replaced §21's original Sudden Death format (individual
+questions, first to two consecutive correct answers) with a face-off format,
+during live playtesting of Round 4. This is a genuine rule REPLACEMENT, not an
+addition — the original text is gone, not layered under.
+
+**New format:**
+
+- Sudden Death is contested by the tied leaders only, and is a sequence of
+  FACE-OFFS — the same face-off mechanic as Round 4 §19 (buzzer opens while
+  the Host reads, first valid buzz locks out the other side, that team has a
+  timed answer window), not individual solo questions.
+- A team wins a face-off by giving the #1 board answer (or, per the normal
+  face-off rules, the higher-ranked valid answer once the opponent's chance
+  is used).
+- A WRONG answer, or FAILING TO ANSWER after buzzing (a timeout), loses that
+  face-off outright for the team that answered — there is no opponent's
+  "chance" fallback inside Sudden Death the way there is in normal Round 4;
+  losing the face-off you answered in is immediate.
+- If NEITHER team gives a valid answer in a face-off (both buzz-and-fail, or
+  nobody buzzes before the window used for that face-off closes), nothing is
+  decided — the game continues to another face-off with a fresh question.
+- The first team to win two face-offs **in a row** (consecutive, not
+  cumulative — a loss resets their streak to zero) wins Sudden Death, and the
+  game.
+- No Market, Maco Mail, Bacchanal Cards, advantages, wagers or multipliers —
+  this restriction from the original §21 text is UNCHANGED and still applies.
+
+**Still not decided, and not invented here:** the exact answer-window duration
+for a Sudden Death face-off. `OPEN_RULES.md` §11 is updated to reflect that
+this is what remains open — the format itself is now locked by this decision,
+only the timer length is still outstanding. Implemented with a default of 3
+seconds (reusing Round 4's own locked face-off window, §19) — configurable,
+not independently locked.
+
+**There is no separate "buzzer is open for N seconds" timer.** The buzzer
+opens when the Host starts reading and stays open — same as Round 4's own
+face-off buzzer (§19) — with no countdown of its own. If nobody buzzes, the
+Host decides when to move on: a manual "no decision, reveal a fresh question"
+action, not a timed one. Only the POST-BUZZ answer window (3s default, above)
+is a real timer.
+
+**GAME_RULES_LOCKED.md §21 is rewritten to match this decision exactly.**
